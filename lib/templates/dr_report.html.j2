@@ -1,0 +1,57 @@
+{# lib/templates/dr_report.html.j2 #}
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>DR Backup Report — {{ diff.date_curr }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    h1 { color: #1a1a2e; }
+    .ok { color: green; font-weight: bold; }
+    .error { color: red; font-weight: bold; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background: #f0f0f0; }
+    .added { background: #e6ffe6; }
+    .removed { background: #ffe6e6; }
+  </style>
+</head>
+<body>
+  <h1>DR Backup Report</h1>
+  <p><strong>Date backup :</strong> {{ diff.date_curr }}</p>
+  <p><strong>Backup précédent :</strong> {{ diff.date_prev }}</p>
+
+  <h2>Statistiques</h2>
+  <table>
+    <tr><th>Asset</th><th>Total</th></tr>
+    <tr><td>Tables Delta</td><td>{{ stats.total_tables }}</td></tr>
+    <tr><td>Jobs</td><td>{{ stats.total_jobs }}</td></tr>
+    <tr><td>Notebooks</td><td>{{ stats.total_notebooks }}</td></tr>
+    <tr><td>Volume données</td><td>{{ stats.data_size_gb }} GB</td></tr>
+  </table>
+
+  <h2>Étapes</h2>
+  <table>
+    <tr><th>Étape</th><th>Statut</th><th>Durée (s)</th><th>Erreur</th></tr>
+    {% for step in steps %}
+    <tr>
+      <td>{{ step.name }}</td>
+      <td class="{{ step.status }}">{{ step.status }}</td>
+      <td>{{ step.duration_s }}</td>
+      <td>{{ step.error | default('') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <h2>Diff vs J-1</h2>
+  {% for category in ['tables', 'jobs', 'notebooks'] %}
+  <h3>{{ category | capitalize }}</h3>
+  <table>
+    <tr><th>Type</th><th>Éléments</th></tr>
+    <tr class="added"><td>Ajoutés</td><td>{{ diff[category].added | join(', ') or '—' }}</td></tr>
+    <tr class="removed"><td>Supprimés</td><td>{{ diff[category].removed | join(', ') or '—' }}</td></tr>
+    <tr><td>Inchangés</td><td>{{ diff[category].unchanged | length }} éléments</td></tr>
+  </table>
+  {% endfor %}
+</body>
+</html>
