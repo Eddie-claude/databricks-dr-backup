@@ -12,42 +12,56 @@ from datetime import date
 # COMMAND ----------
 dbutils.widgets.text("backup_root", "abfss://dr-backup@st10keyitdpdrpdevchn00.dfs.core.windows.net", "Backup root")
 dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
+dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")
+lib_path = dbutils.widgets.get("lib_path")
 
 steps = []
+global_status = "success"
 
-def run_step(name, notebook_path, params):
+# COMMAND ----------
+# DBTITLE 1, Helper run_step
+
+def run_step(name, notebook_path, params, critical=False):
+    """
+    Exécute un notebook. Si critical=True et que le notebook échoue,
+    lève une exception pour interrompre le pipeline.
+    """
+    global global_status
     start = time.time()
     try:
         result = dbutils.notebook.run(notebook_path, timeout_seconds=7200, arguments=params)
         duration = int(time.time() - start)
         steps.append({"name": name, "status": "success", "duration_s": duration})
         print(f"[OK] {name} ({duration}s)")
-        return json.loads(result) if result and result != "ok" else {}
+        return json.loads(result) if result and result not in ("ok",) else json.loads(result) if result and result.startswith("{") else {}
     except Exception as e:
         duration = int(time.time() - start)
         steps.append({"name": name, "status": "error", "duration_s": duration, "error": str(e)})
+        global_status = "degraded"
         print(f"[ERROR] {name}: {e}")
+        if critical:
+            raise RuntimeError(f"Étape critique '{name}' échouée — pipeline interrompu: {e}")
         return {}
 
 # COMMAND ----------
-# DBTITLE 1, Étape 1 — UC Metadata
+# DBTITLE 1, Étape 1 — UC Metadata (critique)
 
-base_params = {"backup_root": backup_root, "backup_date": backup_date}
-uc_result = run_step("uc_metadata", "./01_uc_metadata", base_params)
+base_params = {"backup_root": backup_root, "backup_date": backup_date, "lib_path": lib_path}
+uc_result = run_step("uc_metadata", "./01_uc_metadata", base_params, critical=True)
 
 # COMMAND ----------
-# DBTITLE 1, Étape 2 — Data Clone
+# DBTITLE 1, Étape 2 — Data Clone (critique)
 
 clone_result = run_step("data_clone", "./02_data_clone", {
     **base_params,
     "uc_metadata_result": json.dumps(uc_result),
-})
+}, critical=True)
 
 # COMMAND ----------
-# DBTITLE 1, Construire le manifest courant
+# DBTITLE 1, Écrire le manifest courant dans ADLS (avant diff)
 
 table_names = uc_result.get("table_names", [])
 current_manifest = {
@@ -59,17 +73,15 @@ current_manifest = {
 
 manifest_path = f"{backup_root}/{backup_date}/manifest.json"
 dbutils.fs.put(manifest_path, json.dumps(current_manifest, indent=2), overwrite=True)
+print(f"[OK] Manifest écrit : {manifest_path}")
 
 # COMMAND ----------
-# DBTITLE 1, Étape 3 — Diff
+# DBTITLE 1, Étape 3 — Diff (non critique)
 
-diff_result = run_step("diff", "./03_diff", {
-    **base_params,
-    "current_manifest": json.dumps(current_manifest),
-})
+diff_result = run_step("diff", "./03_diff", base_params, critical=False)
 
 # COMMAND ----------
-# DBTITLE 1, Étape 4 — Rapport
+# DBTITLE 1, Étape 4 — Rapport (non critique)
 
 stats = {
     "total_tables": len(table_names),
@@ -83,12 +95,17 @@ run_step("report", "./04_report", {
     "diff_json": json.dumps(diff_result),
     "stats_json": json.dumps(stats),
     "steps_json": json.dumps(steps),
-})
+}, critical=False)
 
 # COMMAND ----------
-# DBTITLE 1, Mettre à jour latest.json
+# DBTITLE 1, Mettre à jour latest.json avec statut global
 
-latest = {"date": backup_date, "manifest_path": manifest_path}
+latest = {
+    "date": backup_date,
+    "manifest_path": manifest_path,
+    "status": global_status,
+    "steps_summary": {s["name"]: s["status"] for s in steps},
+}
 dbutils.fs.put(f"{backup_root}/latest.json", json.dumps(latest, indent=2), overwrite=True)
 
-print(f"\n[DR Backup] Terminé — {backup_date}")
+print(f"\n[DR Backup] Terminé — {backup_date} — statut: {global_status}")

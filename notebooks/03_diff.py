@@ -6,21 +6,31 @@
 
 # COMMAND ----------
 import json
+import os
 import sys
 from datetime import date, timedelta
-
-# Ajouter lib/ au path (chemin relatif dans le repo importé dans le workspace)
-sys.path.insert(0, "/Workspace/Shared/dr-backup/lib")
-from diff import compute_diff, BackupManifest
 
 # COMMAND ----------
 dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date", str(date.today()), "Date backup J")
-dbutils.widgets.text("current_manifest", "{}", "Manifest JSON du backup courant")
+dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")
-current_manifest_raw = json.loads(dbutils.widgets.get("current_manifest"))
+lib_path = dbutils.widgets.get("lib_path")
+
+sys.path.insert(0, lib_path)
+from diff import compute_diff, BackupManifest
+
+# COMMAND ----------
+# DBTITLE 1, Charger le manifest courant depuis ADLS
+
+manifest_curr_path = f"{backup_root}/{backup_date}/manifest.json"
+try:
+    current_manifest_raw = json.loads(dbutils.fs.head(manifest_curr_path, 1_000_000))
+    print(f"[OK] Manifest courant chargé depuis {manifest_curr_path}")
+except Exception as e:
+    raise RuntimeError(f"Impossible de charger le manifest courant {manifest_curr_path}: {e}")
 
 # COMMAND ----------
 # DBTITLE 1, Charger le manifest J-1

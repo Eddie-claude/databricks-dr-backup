@@ -18,9 +18,10 @@ dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")
-output_path = f"{backup_root}/{backup_date}/uc_metadata"
 
 assert backup_root.startswith("abfss://"), "backup_root doit commencer par abfss://"
+
+output_path = f"{backup_root}/{backup_date}/uc_metadata"
 
 # COMMAND ----------
 # DBTITLE 1, Export catalogs
@@ -32,25 +33,17 @@ dbutils.fs.put(f"{output_path}/01_catalogs.sql", catalog_ddl, overwrite=True)
 print(f"[01_catalogs] {len(catalogs)} catalogs exportés : {catalogs}")
 
 # COMMAND ----------
-# DBTITLE 1, Export schemas
+# DBTITLE 1, Export schemas + tables (avec cache schemas)
 
 schema_ddls = []
+table_ddls = []
+table_names = []
+
 for catalog in catalogs:
+    # Cache des schemas pour ce catalog (une seule requête)
     schemas = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{catalog}`").collect()]
     for schema in schemas:
         schema_ddls.append(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`;")
-
-dbutils.fs.put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls), overwrite=True)
-print(f"[02_schemas] {len(schema_ddls)} schemas exportés")
-
-# COMMAND ----------
-# DBTITLE 1, Export tables DDL
-
-table_ddls = []
-table_names = []
-for catalog in catalogs:
-    schemas = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{catalog}`").collect()]
-    for schema in schemas:
         tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
         for t in tables:
             fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
@@ -61,32 +54,47 @@ for catalog in catalogs:
             except Exception as e:
                 print(f"[WARN] Impossible d'exporter {fqn}: {e}")
 
+dbutils.fs.put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls), overwrite=True)
+print(f"[02_schemas] {len(schema_ddls)} schemas exportés")
+
 dbutils.fs.put(f"{output_path}/03_tables.sql", "\n\n".join(table_ddls), overwrite=True)
 print(f"[03_tables] {len(table_ddls)} tables exportées")
 
 # COMMAND ----------
-# DBTITLE 1, Export grants
+# DBTITLE 1, Export grants (catalogs, schemas, tables)
 
 grant_statements = []
+
 for catalog in catalogs:
+    # Grants catalog
     try:
-        grants = spark.sql(f"SHOW GRANTS ON CATALOG `{catalog}`").collect()
-        for g in grants:
+        for g in spark.sql(f"SHOW GRANTS ON CATALOG `{catalog}`").collect():
             grant_statements.append(f"GRANT {g.ActionType} ON CATALOG `{catalog}` TO `{g.Principal}`;")
     except Exception as e:
         print(f"[WARN] Grants catalog {catalog}: {e}")
 
     schemas = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{catalog}`").collect()]
     for schema in schemas:
+        # Grants schema
         try:
-            grants = spark.sql(f"SHOW GRANTS ON SCHEMA `{catalog}`.`{schema}`").collect()
-            for g in grants:
+            for g in spark.sql(f"SHOW GRANTS ON SCHEMA `{catalog}`.`{schema}`").collect():
                 grant_statements.append(f"GRANT {g.ActionType} ON SCHEMA `{catalog}`.`{schema}` TO `{g.Principal}`;")
         except Exception as e:
             print(f"[WARN] Grants schema {catalog}.{schema}: {e}")
 
-dbutils.fs.put(f"{output_path}/05_grants.sql", "\n".join(grant_statements), overwrite=True)
-print(f"[05_grants] {len(grant_statements)} grants exportés")
+        # Grants tables
+        tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
+        for t in tables:
+            fqn_plain = f"{catalog}.{schema}.{t.tableName}"
+            fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
+            try:
+                for g in spark.sql(f"SHOW GRANTS ON TABLE {fqn}").collect():
+                    grant_statements.append(f"GRANT {g.ActionType} ON TABLE {fqn} TO `{g.Principal}`;")
+            except Exception as e:
+                print(f"[WARN] Grants table {fqn_plain}: {e}")
+
+dbutils.fs.put(f"{output_path}/04_grants.sql", "\n".join(grant_statements), overwrite=True)
+print(f"[04_grants] {len(grant_statements)} grants exportés")
 
 # COMMAND ----------
 # DBTITLE 1, Retourner le manifest partiel
