@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# terraform.tfvars.example
+# Copiez ce fichier en "terraform.tfvars" et renseignez vos valeurs.
+# Ne jamais committer terraform.tfvars en Git (contient des secrets).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Région ───────────────────────────────────────────────────────────────────
+location      = "westeurope"        # Région du storage DR (différente de la prod si possible)
+location_prod = "switzerlandnorth"  # Région du workspace Databricks
+
+# ── Resource Groups ───────────────────────────────────────────────────────────
+rg_dr_name         = "rg-databricks-dr"
+rg_databricks_name = "rg-databricks-prod"
+
+# ── Réseau Databricks (VNET injection) ────────────────────────────────────────
+databricks_vnet_name     = "vnet-databricks-prod"
+databricks_vnet_rg       = "rg-databricks-prod"
+pe_subnet_name           = "snet-private-endpoints"
+pe_subnet_address_prefix = "10.0.3.0/27"
+create_pe_subnet         = true   # false si le subnet existe déjà
+
+# ── Storage Account DR ────────────────────────────────────────────────────────
+storage_account_name     = "stdbdrbackup"   # Doit être globalement unique
+storage_account_tier     = "Standard"
+storage_replication_type = "ZRS"            # Zone-redundant
+container_name           = "dr-backup"
+soft_delete_retention_days = 14
+
+# ── Access Connector ──────────────────────────────────────────────────────────
+access_connector_name = "ac-databricks-prod"
+access_connector_rg   = "rg-databricks-prod"
+
+# ── Databricks (pour créer Storage Credential + External Location via UC) ─────
+databricks_host  = "https://adb-XXXXXXXXXXXXXXXX.XX.azuredatabricks.net"
+databricks_token = "dapi..."   # PAT avec droits admin UC — NE PAS committer!
+
+# ── Tags ──────────────────────────────────────────────────────────────────────
+tags = {
+  project     = "databricks-dr"
+  environment = "dr"
+  managed_by  = "terraform"
+  client      = "mon-client"
+}
