@@ -5,10 +5,7 @@ from scripts.export_workspace import build_export_commands, write_json_asset
 
 
 def test_build_export_commands_contains_workspace_export():
-    cmds = build_export_commands(
-        workspace_host="https://adb-123.azuredatabricks.net",
-        backup_path="/tmp/backup/2026-04-02/workspace",
-    )
+    cmds = build_export_commands(backup_path="/tmp/backup/2026-04-02/workspace")
     assert any("workspace" in " ".join(c) and "export" in " ".join(c) for c in cmds)
 
 

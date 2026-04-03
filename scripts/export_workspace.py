@@ -9,9 +9,13 @@ import subprocess
 from datetime import date
 from typing import Any, List
 
+import requests
 
-def build_export_commands(workspace_host: str, backup_path: str) -> List[List[str]]:
-    """Retourne la liste des commandes CLI à exécuter pour l'export workspace."""
+
+def build_export_commands(backup_path: str) -> List[List[str]]:
+    """Retourne la liste des commandes CLI Databricks pour l'export workspace.
+    L'hôte est lu depuis la variable d'env DATABRICKS_HOST par le CLI.
+    """
     return [
         ["databricks", "workspace", "export-dir", "/", f"{backup_path}/notebooks", "--overwrite"],
     ]
@@ -24,7 +28,6 @@ def write_json_asset(data: Any, output_path: str) -> None:
 
 
 def export_jobs(host: str, token: str, output_path: str) -> List[str]:
-    import requests
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params={"limit": 100})
     resp.raise_for_status()
@@ -34,7 +37,6 @@ def export_jobs(host: str, token: str, output_path: str) -> List[str]:
 
 
 def export_clusters(host: str, token: str, output_path: str) -> None:
-    import requests
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(f"{host}/api/2.0/clusters/list", headers=headers)
     resp.raise_for_status()
@@ -42,7 +44,6 @@ def export_clusters(host: str, token: str, output_path: str) -> None:
 
 
 def export_policies(host: str, token: str, output_path: str) -> None:
-    import requests
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(f"{host}/api/2.0/policies/clusters/list", headers=headers)
     resp.raise_for_status()
@@ -50,7 +51,6 @@ def export_policies(host: str, token: str, output_path: str) -> None:
 
 
 def export_warehouses(host: str, token: str, output_path: str) -> None:
-    import requests
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get(f"{host}/api/2.0/sql/warehouses", headers=headers)
     resp.raise_for_status()
@@ -58,9 +58,8 @@ def export_warehouses(host: str, token: str, output_path: str) -> None:
 
 
 def trigger_databricks_job(host: str, token: str, job_name: str, backup_date: str) -> int:
-    import requests
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers)
+    resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params={"limit": 100})
     resp.raise_for_status()
     jobs = resp.json().get("jobs", [])
     job = next((j for j in jobs if j["settings"]["name"] == job_name), None)
@@ -88,10 +87,10 @@ def main() -> None:
     os.makedirs(workspace_dir, exist_ok=True)
     print(f"[CI/CD] Export workspace — date={backup_date}")
 
-    cmds = build_export_commands(host, workspace_dir)
+    cmds = build_export_commands(workspace_dir)
     for cmd in cmds:
         print(f"  → {' '.join(cmd)}")
-        subprocess.run(cmd, check=True, env={**os.environ, "DATABRICKS_HOST": host, "DATABRICKS_TOKEN": token})
+        subprocess.run(cmd, check=True)
 
     export_jobs(host, token, f"{workspace_dir}/jobs.json")
     export_clusters(host, token, f"{workspace_dir}/clusters.json")
@@ -107,6 +106,8 @@ def main() -> None:
             check=True
         )
         print(f"[CI/CD] Upload ADLS terminé → {backup_root}/{backup_date}/workspace")
+    else:
+        print("[WARN] BACKUP_ROOT non défini — upload ADLS ignoré")
 
     trigger_databricks_job(host, token, "dr-backup-daily", backup_date)
 
