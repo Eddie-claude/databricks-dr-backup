@@ -73,7 +73,7 @@ for catalog in catalogs:
     except Exception as e:
         print(f"[WARN] Grants catalog {catalog}: {e}")
 
-    schemas = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{catalog}`").collect()]
+    schemas = [ddl.split("`")[3] for ddl in schema_ddls if ddl.startswith(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`")]
     for schema in schemas:
         # Grants schema
         try:

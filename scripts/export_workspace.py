@@ -29,39 +29,53 @@ def write_json_asset(data: Any, output_path: str) -> None:
 
 def export_jobs(host: str, token: str, output_path: str) -> List[str]:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params={"limit": 100})
-    resp.raise_for_status()
-    jobs = resp.json().get("jobs", [])
+    jobs = []
+    params: dict = {"limit": 100}
+    while True:
+        resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        body = resp.json()
+        jobs.extend(body.get("jobs", []))
+        if not body.get("has_more"):
+            break
+        params["page_token"] = body["next_page_token"]
     write_json_asset(jobs, output_path)
     return [str(j["job_id"]) for j in jobs]
 
 
 def export_clusters(host: str, token: str, output_path: str) -> None:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.0/clusters/list", headers=headers)
+    resp = requests.get(f"{host}/api/2.0/clusters/list", headers=headers, timeout=30)
     resp.raise_for_status()
     write_json_asset(resp.json().get("clusters", []), output_path)
 
 
 def export_policies(host: str, token: str, output_path: str) -> None:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.0/policies/clusters/list", headers=headers)
+    resp = requests.get(f"{host}/api/2.0/policies/clusters/list", headers=headers, timeout=30)
     resp.raise_for_status()
     write_json_asset(resp.json().get("policies", []), output_path)
 
 
 def export_warehouses(host: str, token: str, output_path: str) -> None:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.0/sql/warehouses", headers=headers)
+    resp = requests.get(f"{host}/api/2.0/sql/warehouses", headers=headers, timeout=30)
     resp.raise_for_status()
     write_json_asset(resp.json().get("warehouses", []), output_path)
 
 
 def trigger_databricks_job(host: str, token: str, job_name: str, backup_date: str) -> int:
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params={"limit": 100})
-    resp.raise_for_status()
-    jobs = resp.json().get("jobs", [])
+    jobs = []
+    params: dict = {"limit": 100}
+    while True:
+        resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        body = resp.json()
+        jobs.extend(body.get("jobs", []))
+        if not body.get("has_more"):
+            break
+        params["page_token"] = body["next_page_token"]
     job = next((j for j in jobs if j["settings"]["name"] == job_name), None)
     if not job:
         raise ValueError(f"Job '{job_name}' introuvable dans le workspace")
@@ -70,6 +84,7 @@ def trigger_databricks_job(host: str, token: str, job_name: str, backup_date: st
         f"{host}/api/2.1/jobs/run-now",
         headers=headers,
         json={"job_id": job_id, "notebook_params": {"backup_date": backup_date}},
+        timeout=30,
     )
     run_resp.raise_for_status()
     run_id = run_resp.json()["run_id"]

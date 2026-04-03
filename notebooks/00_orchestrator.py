@@ -10,7 +10,7 @@ import time
 from datetime import date
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "abfss://dr-backup@st10keyitdpdrpdevchn00.dfs.core.windows.net", "Backup root")
+dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
@@ -36,7 +36,7 @@ def run_step(name, notebook_path, params, critical=False):
         duration = int(time.time() - start)
         steps.append({"name": name, "status": "success", "duration_s": duration})
         print(f"[OK] {name} ({duration}s)")
-        return json.loads(result) if result and result not in ("ok",) else json.loads(result) if result and result.startswith("{") else {}
+        return json.loads(result) if result and result.startswith("{") else {}
     except Exception as e:
         duration = int(time.time() - start)
         steps.append({"name": name, "status": "error", "duration_s": duration, "error": str(e)})
@@ -74,6 +74,31 @@ current_manifest = {
 manifest_path = f"{backup_root}/{backup_date}/manifest.json"
 dbutils.fs.put(manifest_path, json.dumps(current_manifest, indent=2), overwrite=True)
 print(f"[OK] Manifest écrit : {manifest_path}")
+
+# COMMAND ----------
+# DBTITLE 1, Compléter le manifest avec les assets workspace (exportés par CI/CD)
+
+workspace_jobs_path = f"{backup_root}/{backup_date}/workspace/jobs.json"
+workspace_notebooks_manifest = f"{backup_root}/{backup_date}/workspace/notebooks"
+
+try:
+    jobs_raw = json.loads(dbutils.fs.head(workspace_jobs_path, 1_000_000))
+    job_names = [j.get("settings", j).get("name", str(j.get("job_id", ""))) for j in jobs_raw]
+    current_manifest["jobs"] = job_names
+    print(f"[OK] {len(job_names)} jobs chargés dans le manifest")
+except Exception as e:
+    print(f"[WARN] Impossible de charger jobs.json: {e}")
+
+try:
+    nb_files = [f.path for f in dbutils.fs.ls(workspace_notebooks_manifest)]
+    current_manifest["notebooks"] = nb_files
+    print(f"[OK] {len(nb_files)} notebooks listés dans le manifest")
+except Exception as e:
+    print(f"[WARN] Impossible de lister les notebooks: {e}")
+
+# Réécrire le manifest complété
+dbutils.fs.put(manifest_path, json.dumps(current_manifest, indent=2), overwrite=True)
+print(f"[OK] Manifest complété : {manifest_path}")
 
 # COMMAND ----------
 # DBTITLE 1, Étape 3 — Diff (non critique)

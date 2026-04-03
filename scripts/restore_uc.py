@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 
 
+_ALLOWED_SQL_VERBS = {"CREATE", "GRANT", "USE", "ALTER"}
+
 SQL_FILES_ORDER = [
     "01_catalogs.sql",
     "02_schemas.sql",
@@ -29,6 +31,7 @@ def download_sql_files(backup_root: str, backup_date: str, local_dir: str) -> No
 
 def run_sql_file(sql_path: str, host: str, token: str) -> int:
     """Exécute un fichier SQL statement par statement via le Databricks CLI.
+    Valide que chaque statement est un CREATE/GRANT/USE/ALTER avant exécution.
     Retourne le nombre d'erreurs rencontrées (hors already exists).
     """
     with open(sql_path, "r", encoding="utf-8") as f:
@@ -37,6 +40,11 @@ def run_sql_file(sql_path: str, host: str, token: str) -> int:
     statements = [s.strip() for s in content.split(";") if s.strip()]
     errors = 0
     for stmt in statements:
+        first_word = stmt.split()[0].upper() if stmt.split() else ""
+        if first_word not in _ALLOWED_SQL_VERBS:
+            print(f"[BLOCKED] Statement non autorisé ignoré: {stmt[:80]}...")
+            errors += 1
+            continue
         result = subprocess.run(
             ["databricks", "sql", "execute", "--statement", stmt],
             capture_output=True, text=True,
