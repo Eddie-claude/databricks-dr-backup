@@ -1,0 +1,115 @@
+# scripts/export_workspace.py
+"""
+Export des assets workspace Databricks via CLI + REST API.
+Utilisé par le CI/CD pipeline avant de déclencher le Databricks Job.
+"""
+import json
+import os
+import subprocess
+from datetime import date
+from typing import Any, List
+
+
+def build_export_commands(workspace_host: str, backup_path: str) -> List[List[str]]:
+    """Retourne la liste des commandes CLI à exécuter pour l'export workspace."""
+    return [
+        ["databricks", "workspace", "export-dir", "/", f"{backup_path}/notebooks", "--overwrite"],
+    ]
+
+
+def write_json_asset(data: Any, output_path: str) -> None:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def export_jobs(host: str, token: str, output_path: str) -> List[str]:
+    import requests
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers, params={"limit": 100})
+    resp.raise_for_status()
+    jobs = resp.json().get("jobs", [])
+    write_json_asset(jobs, output_path)
+    return [str(j["job_id"]) for j in jobs]
+
+
+def export_clusters(host: str, token: str, output_path: str) -> None:
+    import requests
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(f"{host}/api/2.0/clusters/list", headers=headers)
+    resp.raise_for_status()
+    write_json_asset(resp.json().get("clusters", []), output_path)
+
+
+def export_policies(host: str, token: str, output_path: str) -> None:
+    import requests
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(f"{host}/api/2.0/policies/clusters/list", headers=headers)
+    resp.raise_for_status()
+    write_json_asset(resp.json().get("policies", []), output_path)
+
+
+def export_warehouses(host: str, token: str, output_path: str) -> None:
+    import requests
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(f"{host}/api/2.0/sql/warehouses", headers=headers)
+    resp.raise_for_status()
+    write_json_asset(resp.json().get("warehouses", []), output_path)
+
+
+def trigger_databricks_job(host: str, token: str, job_name: str, backup_date: str) -> int:
+    import requests
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(f"{host}/api/2.1/jobs/list", headers=headers)
+    resp.raise_for_status()
+    jobs = resp.json().get("jobs", [])
+    job = next((j for j in jobs if j["settings"]["name"] == job_name), None)
+    if not job:
+        raise ValueError(f"Job '{job_name}' introuvable dans le workspace")
+    job_id = job["job_id"]
+    run_resp = requests.post(
+        f"{host}/api/2.1/jobs/run-now",
+        headers=headers,
+        json={"job_id": job_id, "notebook_params": {"backup_date": backup_date}},
+    )
+    run_resp.raise_for_status()
+    run_id = run_resp.json()["run_id"]
+    print(f"[OK] Job '{job_name}' déclenché — run_id={run_id}")
+    return run_id
+
+
+def main() -> None:
+    host = os.environ["DATABRICKS_HOST"]
+    token = os.environ["DATABRICKS_TOKEN"]
+    backup_date = os.environ.get("BACKUP_DATE", str(date.today()))
+    local_backup_dir = os.environ.get("LOCAL_BACKUP_DIR", f"/tmp/dr-backup/{backup_date}")
+    workspace_dir = f"{local_backup_dir}/workspace"
+
+    os.makedirs(workspace_dir, exist_ok=True)
+    print(f"[CI/CD] Export workspace — date={backup_date}")
+
+    cmds = build_export_commands(host, workspace_dir)
+    for cmd in cmds:
+        print(f"  → {' '.join(cmd)}")
+        subprocess.run(cmd, check=True, env={**os.environ, "DATABRICKS_HOST": host, "DATABRICKS_TOKEN": token})
+
+    export_jobs(host, token, f"{workspace_dir}/jobs.json")
+    export_clusters(host, token, f"{workspace_dir}/clusters.json")
+    export_policies(host, token, f"{workspace_dir}/policies.json")
+    export_warehouses(host, token, f"{workspace_dir}/sql_warehouses.json")
+
+    print(f"[CI/CD] Export terminé → {workspace_dir}")
+
+    backup_root = os.environ.get("BACKUP_ROOT", "")
+    if backup_root:
+        subprocess.run(
+            ["azcopy", "sync", workspace_dir, f"{backup_root}/{backup_date}/workspace", "--recursive"],
+            check=True
+        )
+        print(f"[CI/CD] Upload ADLS terminé → {backup_root}/{backup_date}/workspace")
+
+    trigger_databricks_job(host, token, "dr-backup-daily", backup_date)
+
+
+if __name__ == "__main__":
+    main()
