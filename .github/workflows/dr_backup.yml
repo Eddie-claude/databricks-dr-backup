@@ -1,0 +1,62 @@
+name: DR Backup Daily
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      backup_date:
+        description: 'Date backup YYYY-MM-DD (defaut: aujourd hui)'
+        required: false
+        default: ''
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+  BACKUP_ROOT: ${{ secrets.BACKUP_ROOT }}
+
+jobs:
+  export-workspace:
+    name: Export workspace assets + trigger Databricks Job
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt requests
+
+      - name: Install Databricks CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+          databricks version
+
+      - name: Install azcopy
+        run: |
+          wget -q https://aka.ms/downloadazcopy-v10-linux -O azcopy.tar.gz
+          tar -xzf azcopy.tar.gz --strip-components=1 --wildcards '*/azcopy'
+          sudo mv azcopy /usr/local/bin/
+          azcopy --version
+
+      - name: Set backup date
+        run: |
+          DATE="${{ github.event.inputs.backup_date }}"
+          if [ -z "$DATE" ]; then DATE=$(date -u +%Y-%m-%d); fi
+          echo "BACKUP_DATE=$DATE" >> $GITHUB_ENV
+          echo "LOCAL_BACKUP_DIR=/tmp/dr-backup/$DATE" >> $GITHUB_ENV
+
+      - name: Export workspace assets
+        run: python scripts/export_workspace.py
+
+      - name: Upload summary
+        if: always()
+        run: |
+          echo "## DR Backup ${{ env.BACKUP_DATE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Workspace export: termine" >> $GITHUB_STEP_SUMMARY
+          echo "- Databricks Job declenche" >> $GITHUB_STEP_SUMMARY
