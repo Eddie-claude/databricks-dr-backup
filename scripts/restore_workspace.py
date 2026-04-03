@@ -31,11 +31,14 @@ def restore_jobs(jobs_json_path: str, host: str, token: str) -> None:
         jobs = json.load(f)
     for job in jobs:
         settings = job.get("settings", job)
-        resp = requests.post(f"{host}/api/2.1/jobs/create", headers=headers, json=settings)
-        if resp.status_code == 200:
-            print(f"[OK] Job créé: {settings.get('name', 'unknown')}")
-        else:
-            print(f"[WARN] Job {settings.get('name')}: {resp.text}")
+        try:
+            resp = requests.post(f"{host}/api/2.1/jobs/create", headers=headers, json=settings)
+            if resp.ok:
+                print(f"[OK] Job créé: {settings.get('name', 'unknown')}")
+            else:
+                print(f"[WARN] Job {settings.get('name')}: HTTP {resp.status_code} — {resp.text}")
+        except requests.exceptions.RequestException as e:
+            print(f"[ERROR] Job {settings.get('name')}: connexion échouée — {e}")
 
 
 def main() -> None:

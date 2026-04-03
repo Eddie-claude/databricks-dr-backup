@@ -27,22 +27,30 @@ def download_sql_files(backup_root: str, backup_date: str, local_dir: str) -> No
     )
 
 
-def run_sql_file(sql_path: str, host: str, token: str) -> None:
-    """Exécute un fichier SQL statement par statement via le Databricks CLI."""
+def run_sql_file(sql_path: str, host: str, token: str) -> int:
+    """Exécute un fichier SQL statement par statement via le Databricks CLI.
+    Retourne le nombre d'erreurs rencontrées (hors already exists).
+    """
     with open(sql_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     statements = [s.strip() for s in content.split(";") if s.strip()]
+    errors = 0
     for stmt in statements:
         result = subprocess.run(
             ["databricks", "sql", "execute", "--statement", stmt],
             capture_output=True, text=True,
             env={**os.environ, "DATABRICKS_HOST": host, "DATABRICKS_TOKEN": token}
         )
-        if result.returncode != 0 and "already exists" not in result.stderr.lower():
-            print(f"[WARN] {stmt[:80]}... → {result.stderr.strip()}")
+        if result.returncode != 0:
+            if "already exists" in result.stderr.lower():
+                print(f"[SKIP already exists] {stmt[:80]}...")
+            else:
+                errors += 1
+                print(f"[ERROR] {stmt[:80]}... → {result.stderr.strip()}")
         else:
             print(f"[OK] {stmt[:80]}...")
+    return errors
 
 
 def main() -> None:
@@ -54,6 +62,9 @@ def main() -> None:
     host = os.environ["DATABRICKS_HOST"]
     token = os.environ["DATABRICKS_TOKEN"]
 
+    # Fichiers critiques : leur échec doit bloquer la suite
+    critical_files = {"01_catalogs.sql", "02_schemas.sql"}
+
     with tempfile.TemporaryDirectory() as tmpdir:
         print(f"[Restore UC] Téléchargement des dumps SQL depuis {args.backup_root}...")
         download_sql_files(args.backup_root, args.backup_date, tmpdir)
@@ -64,7 +75,9 @@ def main() -> None:
                 print(f"[SKIP] {sql_file} introuvable")
                 continue
             print(f"\n[Restore UC] Exécution {sql_file}...")
-            run_sql_file(path, host, token)
+            errors = run_sql_file(path, host, token)
+            if errors > 0 and sql_file in critical_files:
+                raise RuntimeError(f"{sql_file}: {errors} erreur(s) critique(s) — restauration interrompue")
 
     print("\n[Restore UC] Terminé.")
 
