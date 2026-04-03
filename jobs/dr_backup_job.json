@@ -1,0 +1,31 @@
+{
+  "name": "dr-backup-daily",
+  "description": "DR Backup journalier — UC metadata + Delta DEEP CLONE + diff + rapport",
+  "tags": {
+    "project": "databricks-dr",
+    "managed_by": "terraform"
+  },
+  "schedule": {
+    "quartz_cron_expression": "0 0 2 * * ?",
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
+  },
+  "tasks": [
+    {
+      "task_key": "orchestrator",
+      "notebook_task": {
+        "notebook_path": "/Shared/dr-backup/notebooks/00_orchestrator",
+        "base_parameters": {
+          "backup_root": "abfss://dr-backup@st10keyitdpdrpdevchn00.dfs.core.windows.net",
+          "lib_path": "/Workspace/Shared/dr-backup/lib"
+        }
+      },
+      "existing_cluster_id": "__SET_CLUSTER_ID__",
+      "timeout_seconds": 28800,
+      "email_notifications": {
+        "on_failure": ["__SET_EMAIL__"]
+      }
+    }
+  ],
+  "max_concurrent_runs": 1
+}
