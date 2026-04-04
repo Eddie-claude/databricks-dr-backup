@@ -16,14 +16,14 @@
       "notebook_task": {
         "notebook_path": "/Shared/dr-backup/notebooks/00_orchestrator",
         "base_parameters": {
-          "backup_root": "__SET_BACKUP_ROOT__",
+          "backup_root": "abfss://dr-backup@st10keyitdpdrpdevchn00.dfs.core.windows.net",
           "lib_path": "/Workspace/Shared/dr-backup/lib"
         }
       },
-      "existing_cluster_id": "__SET_CLUSTER_ID__",
+      "existing_cluster_id": "0324-151813-88ppprjg",
       "timeout_seconds": 28800,
       "email_notifications": {
-        "on_failure": ["__SET_EMAIL__"]
+        "on_failure": ["efi@keyit.ch"]
       }
     }
   ],
