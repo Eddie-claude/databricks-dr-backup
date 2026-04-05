@@ -3,7 +3,7 @@ name: DR Backup — Deploy & Run (DAB)
 on:
   # Déploiement sur push vers main
   push:
-    branches: [main]
+    branches: [main, feature/dr-backup-implementation]
     paths:
       - 'notebooks/**'
       - 'lib/**'
