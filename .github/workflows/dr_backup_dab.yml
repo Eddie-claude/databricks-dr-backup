@@ -69,5 +69,4 @@ jobs:
 
           databricks bundle run dr_backup_daily \
             --target ${{ github.event.inputs.target || 'prod' }} \
-            --job-key orchestrator \
             $PARAMS
