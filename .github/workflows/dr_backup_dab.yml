@@ -30,8 +30,12 @@ on:
         default: ""
 
 env:
-  DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
-  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+  DATABRICKS_HOST:        ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_TOKEN:       ${{ secrets.DATABRICKS_TOKEN }}
+  ARM_CLIENT_ID:          ""
+  ARM_CLIENT_SECRET:      ""
+  ARM_TENANT_ID:          ""
+  DATABRICKS_AUTH_TYPE:   "pat"
 
 jobs:
   deploy:
