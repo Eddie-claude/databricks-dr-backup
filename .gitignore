@@ -14,6 +14,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Databricks Asset Bundles
+.databricks/
+
 # Divers
 .env
 *.log

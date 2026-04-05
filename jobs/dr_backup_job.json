@@ -16,7 +16,7 @@
       "notebook_task": {
         "notebook_path": "/Shared/dr-backup/notebooks/00_orchestrator",
         "base_parameters": {
-          "backup_root": "abfss://dr-backup@st10keyitdpdrpdevchn00.dfs.core.windows.net",
+          "backup_root": "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup",
           "lib_path": "/Workspace/Shared/dr-backup/lib"
         }
       },

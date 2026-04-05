@@ -1,0 +1,68 @@
+bundle:
+  name: dr-backup
+
+# ── Variables globales ────────────────────────────────────────────────────────
+variables:
+  backup_root:
+    description: "Chemin ADLS racine du backup (abfss://...)"
+    default: "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
+  lib_path:
+    description: "Chemin workspace vers lib/"
+    default: "/Workspace/Shared/dr-backup/lib"
+  cluster_id:
+    description: "ID du cluster existant à utiliser"
+    default: "0324-151813-88ppprjg"
+  notification_email:
+    description: "Email de notification en cas d'échec"
+    default: "efi@keyit.ch"
+
+# ── Ressources ────────────────────────────────────────────────────────────────
+resources:
+  jobs:
+    dr_backup_daily:
+      name: dr-backup-daily
+      description: "DR Backup journalier — UC metadata + Delta DEEP CLONE + diff + rapport"
+
+      tags:
+        project: databricks-dr
+        managed_by: dab
+
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+
+      max_concurrent_runs: 1
+
+      tasks:
+        - task_key: orchestrator
+          existing_cluster_id: ${var.cluster_id}
+          timeout_seconds: 28800
+          notebook_task:
+            notebook_path: ./notebooks/00_orchestrator.py
+            base_parameters:
+              backup_root: ${var.backup_root}
+              lib_path:    ${var.lib_path}
+          email_notifications:
+            on_failure:
+              - ${var.notification_email}
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+targets:
+
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-2547670924000766.6.azuredatabricks.net
+    variables:
+      backup_root: "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup-dev"
+      lib_path: "/Workspace/Shared/dr-backup-dev/lib"
+
+  prod:
+    mode: production
+    workspace:
+      host: https://adb-2547670924000766.6.azuredatabricks.net
+    variables:
+      backup_root: "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
+      lib_path: "/Workspace/Shared/dr-backup/lib"

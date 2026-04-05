@@ -117,7 +117,9 @@ stats = {
 
 run_step("report", "./04_report", {
     **base_params,
-    "diff_json": json.dumps(diff_result),
+    # diff_json laissé vide : 04_report lit le diff depuis ADLS
+    # (évite la limite de taille des paramètres widget)
+    "diff_json": "{}",
     "stats_json": json.dumps(stats),
     "steps_json": json.dumps(steps),
 }, critical=False)

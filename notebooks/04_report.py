@@ -19,10 +19,23 @@ dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")
-diff = json.loads(dbutils.widgets.get("diff_json"))
+lib_path = dbutils.widgets.get("lib_path")
+
+# Diff: lire depuis ADLS (chemin canonique), fallback sur le widget
+diff_json_widget = dbutils.widgets.get("diff_json")
+if diff_json_widget and diff_json_widget != "{}":
+    diff = json.loads(diff_json_widget)
+else:
+    diff_path = f"{backup_root}/{backup_date}/diff/diff_{backup_date}.json"
+    try:
+        diff = json.loads(dbutils.fs.head(diff_path, 10_000_000))
+        print(f"[OK] Diff chargé depuis {diff_path}")
+    except Exception as e:
+        print(f"[WARN] Diff non disponible ({e}), rapport sans diff")
+        diff = {}
+
 stats = json.loads(dbutils.widgets.get("stats_json"))
 steps = json.loads(dbutils.widgets.get("steps_json"))
-lib_path = dbutils.widgets.get("lib_path")
 
 sys.path.insert(0, lib_path)
 from report import generate_report

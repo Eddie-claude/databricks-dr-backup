@@ -1,0 +1,69 @@
+name: DR Backup — Deploy & Run (DAB)
+
+on:
+  # Déploiement sur push vers main
+  push:
+    branches: [main]
+    paths:
+      - 'notebooks/**'
+      - 'lib/**'
+      - 'resources/**'
+      - 'databricks.yml'
+
+  # Déploiement manuel avec choix de l'environnement
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target DAB (dev ou prod)"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+      run_job:
+        description: "Lancer le job après déploiement?"
+        required: false
+        default: "false"
+        type: boolean
+      backup_date:
+        description: "Date backup YYYY-MM-DD (vide = aujourd'hui)"
+        required: false
+        default: ""
+
+env:
+  DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+jobs:
+  deploy:
+    name: Deploy bundle (${{ github.event.inputs.target || 'prod' }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: |
+          databricks bundle validate \
+            --target ${{ github.event.inputs.target || 'prod' }}
+
+      - name: Deploy bundle
+        run: |
+          databricks bundle deploy \
+            --target ${{ github.event.inputs.target || 'prod' }}
+
+      - name: Run job (optionnel)
+        if: ${{ github.event.inputs.run_job == 'true' }}
+        run: |
+          PARAMS=""
+          if [ -n "${{ github.event.inputs.backup_date }}" ]; then
+            PARAMS="--python-params '[\"${{ github.event.inputs.backup_date }}\"]'"
+          fi
+
+          databricks bundle run dr_backup_daily \
+            --target ${{ github.event.inputs.target || 'prod' }} \
+            --job-key orchestrator \
+            $PARAMS
