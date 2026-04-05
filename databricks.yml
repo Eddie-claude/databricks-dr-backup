@@ -63,6 +63,7 @@ targets:
     mode: production
     workspace:
       host: https://adb-2547670924000766.6.azuredatabricks.net
+      root_path: /Workspace/Shared/dr-backup/.bundle/${bundle.name}/${bundle.target}
     variables:
       backup_root: "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
       lib_path: "/Workspace/Shared/dr-backup/lib"
