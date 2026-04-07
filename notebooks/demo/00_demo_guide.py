@@ -31,7 +31,7 @@
 # MAGIC │   │ (données métier) │                                  │                       │
 # MAGIC │   └──────────────────┘                                  ▼                       │
 # MAGIC │                                      ┌──────────────────────────────────────┐   │
-# MAGIC │   ┌──────────────────┐               │  ADLS Gen2  (Switzerland North)      │   │
+# MAGIC │   ┌──────────────────┐               │  ADLS Gen2  (West Europe)            │   │
 # MAGIC │   │ Workspace Config │               │  st10keyitdpdrpdevwe00 / uc-data     │   │
 # MAGIC │   │ ├ Cluster Pol.   │──────────────▶│                                      │   │
 # MAGIC │   │ ├ Clusters       │  REST API     │  dr-backup/                          │   │
