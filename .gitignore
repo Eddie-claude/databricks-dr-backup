@@ -17,6 +17,9 @@ __pycache__/
 # Databricks Asset Bundles
 .databricks/
 
+# Claude Code (contient des tokens — ne jamais committer)
+.claude/
+
 # Divers
 .env
 *.log
