@@ -6,7 +6,7 @@ tags:
   managed_by: dab
 
 schedule:
-  quartz_cron_expression: "0 0 2 * * ?"
+  quartz_cron_expression: "0 0 1 * * ?"
   timezone_id: UTC
   pause_status: UNPAUSED
 
