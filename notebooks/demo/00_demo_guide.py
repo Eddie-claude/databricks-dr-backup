@@ -14,31 +14,54 @@
 # MAGIC ## Architecture de la solution
 # MAGIC
 # MAGIC ```
-# MAGIC ┌─────────────────────────────────────────────────────────────┐
-# MAGIC │                    DATABRICKS WORKSPACE                     │
-# MAGIC │                                                             │
-# MAGIC │  ┌─────────────┐    ┌─────────────────────────────────┐   │
-# MAGIC │  │  Unity      │    │  Job dr-backup-daily (2h UTC)   │   │
-# MAGIC │  │  Catalog    │───▶│                                 │   │
-# MAGIC │  │  (UC)       │    │  01_uc_metadata  (DDL + grants) │   │
-# MAGIC │  └─────────────┘    │  02_data_clone   (DEEP CLONE)   │   │
-# MAGIC │                     │  03_diff         (J vs J-1)     │   │
-# MAGIC │  ┌─────────────┐    │  04_report       (HTML)         │   │
-# MAGIC │  │  Delta      │───▶│                                 │   │
-# MAGIC │  │  Tables     │    └──────────────┬──────────────────┘   │
-# MAGIC │  └─────────────┘                   │                      │
-# MAGIC │                                    ▼                      │
-# MAGIC │                     ┌─────────────────────────────────┐   │
-# MAGIC │  ┌─────────────┐    │  ADLS Gen2 (External Location)  │   │
-# MAGIC │  │  GitHub     │───▶│  dr-backup/                     │   │
-# MAGIC │  │  Actions    │    │  ├── YYYY-MM-DD/                │   │
-# MAGIC │  │  (CI/CD)    │    │  │   ├── uc_metadata/*.sql     │   │
-# MAGIC │  └─────────────┘    │  │   ├── data/ (Delta clones)  │   │
-# MAGIC │                     │  │   ├── diff/*.json            │   │
-# MAGIC │                     │  │   └── report/*.html          │   │
-# MAGIC │                     │  └── latest.json                │   │
-# MAGIC │                     └─────────────────────────────────┘   │
-# MAGIC └─────────────────────────────────────────────────────────────┘
+# MAGIC ┌──────────────────────────────────────────────────────────────────────────────────┐
+# MAGIC │                          DATABRICKS WORKSPACE                                    │
+# MAGIC │                                                                                  │
+# MAGIC │   SOURCES DE BACKUP                  JOB dr-backup-daily (2h UTC — DAB prod)    │
+# MAGIC │   ┌──────────────────┐               ┌──────────────────────────────────────┐   │
+# MAGIC │   │ Unity Catalog    │               │ 00_orchestrator                      │   │
+# MAGIC │   │ ├ Catalogs       │──────────────▶│   ├─ 01_uc_metadata  (SQL DDL dump)  │   │
+# MAGIC │   │ ├ Schemas        │               │   ├─ 02_data_clone   (DEEP CLONE)    │   │
+# MAGIC │   │ ├ Tables/Vues    │               │   ├─ 03_diff         (J vs J-1)      │   │
+# MAGIC │   │ └ Grants         │               │   ├─ 04_report       (HTML)          │   │
+# MAGIC │   └──────────────────┘               │   └─ 05_workspace_config             │   │
+# MAGIC │                                      └──────────────────┬───────────────────┘   │
+# MAGIC │   ┌──────────────────┐                                  │                       │
+# MAGIC │   │ Delta Tables     │──────────────▶ (DEEP CLONE)      │                       │
+# MAGIC │   │ (données métier) │                                  │                       │
+# MAGIC │   └──────────────────┘                                  ▼                       │
+# MAGIC │                                      ┌──────────────────────────────────────┐   │
+# MAGIC │   ┌──────────────────┐               │  ADLS Gen2  (Switzerland North)      │   │
+# MAGIC │   │ Workspace Config │               │  st10keyitdpdrpdevwe00 / uc-data     │   │
+# MAGIC │   │ ├ Cluster Pol.   │──────────────▶│                                      │   │
+# MAGIC │   │ ├ Clusters       │  REST API     │  dr-backup/                          │   │
+# MAGIC │   │ ├ ACLs notebooks │               │  ├── latest.json                     │   │
+# MAGIC │   │ └ ACLs repos     │               │  └── YYYY-MM-DD/                     │   │
+# MAGIC │   └──────────────────┘               │      ├── uc_metadata/  *.sql         │   │
+# MAGIC │                                      │      ├── data/         Delta clones  │   │
+# MAGIC │   ┌──────────────────┐               │      ├── diff/         *.json        │   │
+# MAGIC │   │ Jobs / Notebooks │               │      ├── report/       *.html        │   │
+# MAGIC │   │ SQL Warehouses   │──────────────▶│      └── workspace_config/  *.json   │   │
+# MAGIC │   └──────────────────┘  REST API     └──────────────────────────────────────┘   │
+# MAGIC │                                                          ▲                       │
+# MAGIC └──────────────────────────────────────────────────────────┼───────────────────────┘
+# MAGIC                                                            │
+# MAGIC            ┌──────────────────────────────────────────────┐│
+# MAGIC            │  GitHub Actions  (CI/CD)                     ││
+# MAGIC            │  ├─ databricks bundle deploy  (DAB prod)     ││
+# MAGIC            │  ├─ export notebooks  (workspace export-dir) ││
+# MAGIC            │  └─ export jobs / warehouses  (REST API)  ───┘│
+# MAGIC            └──────────────────────────────────────────────┘
+# MAGIC
+# MAGIC ┌──────────────────────────────────────────────────────────────────────────────────┐
+# MAGIC │                           RESTAURATION (DR)                                      │
+# MAGIC │                                                                                  │
+# MAGIC │  restore_uc.py            → SQL DDL replay  (catalogs / schemas / tables / grants)│
+# MAGIC │  03_dr_scenario           → Delta DEEP CLONE depuis ADLS                         │
+# MAGIC │  restore_workspace_config → Cluster policies / Clusters / ACLs  (REST API)       │
+# MAGIC │  restore_workspace.py     → Jobs / Notebooks / SQL Warehouses   (REST API + CLI) │
+# MAGIC │  06_restore_workspace     → Demo dry-run depuis notebook (sans download local)   │
+# MAGIC └──────────────────────────────────────────────────────────────────────────────────┘
 # MAGIC ```
 
 # COMMAND ----------
