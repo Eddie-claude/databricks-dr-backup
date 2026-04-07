@@ -10,7 +10,7 @@ import time
 from datetime import date
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
+dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
@@ -101,7 +101,12 @@ dbutils.fs.put(manifest_path, json.dumps(current_manifest, indent=2), overwrite=
 print(f"[OK] Manifest complété : {manifest_path}")
 
 # COMMAND ----------
-# DBTITLE 1, Étape 3 — Diff (non critique)
+# DBTITLE 1, Étape 3 — Workspace Config (non critique)
+
+run_step("workspace_config", "./05_workspace_config", base_params, critical=False)
+
+# COMMAND ----------
+# DBTITLE 1, Étape 4 — Diff (non critique)
 
 diff_result = run_step("diff", "./03_diff", base_params, critical=False)
 

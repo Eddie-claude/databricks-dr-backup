@@ -20,22 +20,42 @@
 
 # COMMAND ----------
 dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup", "Backup root")
-dbutils.widgets.text("backup_date", "", "Date du backup à restaurer (vide = dernier)")
+dbutils.widgets.text("backup_date", "", "Date du backup à restaurer (vide = dernier, YYYY-MM-DD pour choisir)")
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")
 
 import json
 
+# Lister les backups disponibles
+print("📅 Backups disponibles :")
+try:
+    available = sorted(
+        [f.name.rstrip("/") for f in dbutils.fs.ls(backup_root) if f.name.startswith("20")],
+        reverse=True
+    )
+    for d in available:
+        marker = " ← dernier" if d == available[0] else ""
+        print(f"  • {d}{marker}")
+except Exception as e:
+    print(f"  [WARN] {e}")
+    available = []
+
+print()
+
 if not backup_date:
     latest = json.loads(dbutils.fs.head(f"{backup_root}/latest.json"))
     backup_date = latest["date"]
-    print(f"[AUTO] Date backup détectée : {backup_date}")
+    print(f"[AUTO] Date sélectionnée (dernier backup) : {backup_date}")
+elif backup_date not in available:
+    print(f"[WARN] Date '{backup_date}' non trouvée dans les backups disponibles ci-dessus")
+    print(f"       Tentative quand même...")
 else:
-    print(f"[OK] Date backup : {backup_date}")
+    print(f"[OK] Date sélectionnée : {backup_date}")
 
 catalog = "source_demo01"
 schema_sales = "sales_demo"
+print(f"\nRestauration vers : {catalog}.{schema_sales}")
 
 # COMMAND ----------
 # MAGIC %md ## 4.2 — État AVANT sinistre

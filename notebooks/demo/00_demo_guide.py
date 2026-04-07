@@ -53,7 +53,8 @@
 # MAGIC | 3 | Diff J/J-1 et rapport HTML | `02_show_report` | ~2 min |
 # MAGIC | 4 | Scénario DR : sinistre + restauration | `03_dr_scenario` | ~5 min |
 # MAGIC | 5 | Workspace Config & ACLs | `05_workspace_acl` | ~3 min |
-# MAGIC | 6 | Monitoring & job planifié | *(ce notebook)* | ~2 min |
+# MAGIC | 6 | Restauration Jobs & Notebooks (dry-run) | `06_restore_workspace` | ~3 min |
+# MAGIC | 7 | Monitoring & job planifié | *(ce notebook)* | ~2 min |
 # MAGIC | — | Cleanup | `04_cleanup` | ~1 min |
 
 # COMMAND ----------

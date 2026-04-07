@@ -156,7 +156,55 @@ except Exception as e:
     print(f"  [INFO] {e}")
 
 # COMMAND ----------
-# MAGIC %md ## 6.7 — Périmètre couvert et limites de la solution
+# MAGIC %md ## 6.7 — Vérification du backup Workspace Config
+
+# COMMAND ----------
+import json
+
+print("=" * 60)
+print("BACKUP WORKSPACE CONFIG (ACLs + CLUSTER POLICIES)")
+print("=" * 60)
+
+try:
+    files = dbutils.fs.ls(f"{backup_root}/{backup_date}/workspace_config")
+    print(f"\nFichiers sauvegardés dans workspace_config/ :")
+    for f in files:
+        size_kb = round(f.size / 1024, 1)
+        print(f"  📄 {f.name} ({size_kb} KB)")
+
+    # Afficher un résumé du contenu
+    print()
+
+    policies = json.loads(dbutils.fs.head(
+        f"{backup_root}/{backup_date}/workspace_config/cluster_policies.json", 100_000))
+    print(f"  Cluster policies sauvegardées : {len(policies)}")
+    for p in policies[:5]:
+        print(f"    • {p.get('name')}")
+
+    clusters = json.loads(dbutils.fs.head(
+        f"{backup_root}/{backup_date}/workspace_config/clusters.json", 100_000))
+    print(f"\n  Clusters sauvegardés : {len(clusters)}")
+    for c in clusters[:5]:
+        print(f"    • {c.get('cluster_name')} [{c.get('state')}]")
+
+    acls = json.loads(dbutils.fs.head(
+        f"{backup_root}/{backup_date}/workspace_config/workspace_acls.json", 1_000_000))
+    print(f"\n  ACLs workspace sauvegardées : {len(acls)} objets avec permissions explicites")
+    for a in acls[:5]:
+        print(f"    • {a.get('object_type')} : {a.get('path')}")
+
+    repos = json.loads(dbutils.fs.head(
+        f"{backup_root}/{backup_date}/workspace_config/repos_acls.json", 100_000))
+    print(f"\n  Repos sauvegardés : {len(repos)}")
+    for r in repos[:3]:
+        print(f"    • {r.get('path')} — {r.get('url','')[:50]}")
+
+except Exception as e:
+    print(f"\n[INFO] Backup workspace_config pas encore disponible : {e}")
+    print("       Relancer le job dr-backup-daily pour l'inclure")
+
+# COMMAND ----------
+# MAGIC %md ## 6.8 — Périmètre couvert et limites de la solution
 
 # COMMAND ----------
 print("""
@@ -170,6 +218,8 @@ print("""
 ║     • Données Delta : DEEP CLONE (full + incrémental)    ║
 ║     • Jobs Databricks : export JSON via REST API         ║
 ║     • Notebooks workspace : export via Databricks CLI    ║
+║     • ACLs workspace : notebooks, dossiers, repos        ║
+║     • Cluster policies et configurations cluster         ║
 ║     • Diff J/J-1 : tables, jobs, notebooks               ║
 ║     • Rapport HTML automatique                           ║
 ║                                                          ║
@@ -178,15 +228,9 @@ print("""
 ║     • Tables externes : structure OK, données hors scope ║
 ║                                                          ║
 ║  ❌ NON COUVERT (limites identifiées)                    ║
-║     • ACLs workspace (notebooks, dossiers, repos)        ║
-║     • Cluster policies et configurations cluster         ║
 ║     • Secrets Databricks                                 ║
 ║     • Delta Sharing configurations                       ║
 ║     • MLflow models & experiments                        ║
-║                                                          ║
-║  📋 RECOMMANDATION                                       ║
-║     Ces gaps peuvent être couverts en phase 2 via        ║
-║     l'API Permissions Databricks + export Terraform      ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
 """)
