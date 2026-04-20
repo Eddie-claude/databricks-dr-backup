@@ -43,27 +43,6 @@ def export_jobs(host: str, token: str, output_path: str) -> List[str]:
     return [str(j["job_id"]) for j in jobs]
 
 
-def export_clusters(host: str, token: str, output_path: str) -> None:
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.0/clusters/list", headers=headers, timeout=30)
-    resp.raise_for_status()
-    write_json_asset(resp.json().get("clusters", []), output_path)
-
-
-def export_policies(host: str, token: str, output_path: str) -> None:
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.0/policies/clusters/list", headers=headers, timeout=30)
-    resp.raise_for_status()
-    write_json_asset(resp.json().get("policies", []), output_path)
-
-
-def export_warehouses(host: str, token: str, output_path: str) -> None:
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{host}/api/2.0/sql/warehouses", headers=headers, timeout=30)
-    resp.raise_for_status()
-    write_json_asset(resp.json().get("warehouses", []), output_path)
-
-
 def trigger_databricks_job(host: str, token: str, job_name: str, backup_date: str) -> int:
     headers = {"Authorization": f"Bearer {token}"}
     jobs = []
@@ -108,9 +87,6 @@ def main() -> None:
         subprocess.run(cmd, check=True)
 
     export_jobs(host, token, f"{workspace_dir}/jobs.json")
-    export_clusters(host, token, f"{workspace_dir}/clusters.json")
-    export_policies(host, token, f"{workspace_dir}/policies.json")
-    export_warehouses(host, token, f"{workspace_dir}/sql_warehouses.json")
 
     print(f"[CI/CD] Export terminé → {workspace_dir}")
 

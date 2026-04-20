@@ -15,6 +15,18 @@ variables:
   notification_email:
     description: "Email de notification en cas d'échec"
     default: "efi@keyit.ch"
+  retain_daily:
+    description: "Rétention quotidienne : nombre de jours à conserver intégralement"
+    default: "7"
+  retain_weekly:
+    description: "Rétention hebdomadaire : nombre de semaines (1 backup/semaine)"
+    default: "4"
+  retain_monthly:
+    description: "Rétention mensuelle : nombre de mois (1 backup/mois)"
+    default: "3"
+  dry_run:
+    description: "Dry-run retention (true = simulation, aucune suppression)"
+    default: "false"
 
 # ── Ressources ────────────────────────────────────────────────────────────────
 resources:
@@ -41,8 +53,12 @@ resources:
           notebook_task:
             notebook_path: ./notebooks/00_orchestrator.py
             base_parameters:
-              backup_root: ${var.backup_root}
-              lib_path:    ${var.lib_path}
+              backup_root:    ${var.backup_root}
+              lib_path:       ${var.lib_path}
+              retain_daily:   ${var.retain_daily}
+              retain_weekly:  ${var.retain_weekly}
+              retain_monthly: ${var.retain_monthly}
+              dry_run:        ${var.dry_run}
           email_notifications:
             on_failure:
               - ${var.notification_email}

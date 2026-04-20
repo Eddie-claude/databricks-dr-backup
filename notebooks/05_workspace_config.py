@@ -2,12 +2,11 @@
 # notebooks/05_workspace_config.py
 
 # COMMAND ----------
-# MAGIC %md # 05 — Backup Workspace Config (ACLs + Cluster Policies)
+# MAGIC %md # 05 — Backup Workspace Config (ACLs)
 # MAGIC
 # MAGIC Ce notebook sauvegarde :
 # MAGIC - **ACLs workspace** : permissions sur notebooks, dossiers, repos
-# MAGIC - **Cluster policies** : définitions des policies
-# MAGIC - **Configurations clusters** : paramètres des clusters existants
+# MAGIC - **ACLs repos** : permissions sur les repos Git
 
 # COMMAND ----------
 import json
@@ -30,62 +29,7 @@ output_path = f"{backup_root}/{backup_date}/workspace_config"
 print(f"[OK] Backup workspace config → {output_path}")
 
 # COMMAND ----------
-# MAGIC %md ## 5.1 — Backup Cluster Policies
-
-# COMMAND ----------
-resp = requests.get(f"{host}/api/2.0/policies/clusters/list", headers=headers, timeout=30)
-resp.raise_for_status()
-policies = resp.json().get("policies", [])
-
-dbutils.fs.put(
-    f"{output_path}/cluster_policies.json",
-    json.dumps(policies, indent=2),
-    overwrite=True
-)
-print(f"[OK] {len(policies)} cluster policies sauvegardées")
-for p in policies:
-    print(f"  • {p.get('name')} (id={p.get('policy_id')})")
-
-# COMMAND ----------
-# MAGIC %md ## 5.2 — Backup Configurations Clusters
-
-# COMMAND ----------
-resp = requests.get(f"{host}/api/2.0/clusters/list", headers=headers, timeout=30)
-resp.raise_for_status()
-clusters = resp.json().get("clusters", [])
-
-# Garder uniquement les champs utiles pour la restauration
-cluster_configs = []
-for c in clusters:
-    cluster_configs.append({
-        "cluster_id":             c.get("cluster_id"),
-        "cluster_name":           c.get("cluster_name"),
-        "spark_version":          c.get("spark_version"),
-        "node_type_id":           c.get("node_type_id"),
-        "driver_node_type_id":    c.get("driver_node_type_id"),
-        "autoscale":              c.get("autoscale"),
-        "num_workers":            c.get("num_workers"),
-        "autotermination_minutes":c.get("autotermination_minutes"),
-        "spark_conf":             c.get("spark_conf", {}),
-        "spark_env_vars":         c.get("spark_env_vars", {}),
-        "cluster_source":         c.get("cluster_source"),
-        "policy_id":              c.get("policy_id"),
-        "data_security_mode":     c.get("data_security_mode"),
-        "runtime_engine":         c.get("runtime_engine"),
-        "state":                  c.get("state"),
-    })
-
-dbutils.fs.put(
-    f"{output_path}/clusters.json",
-    json.dumps(cluster_configs, indent=2),
-    overwrite=True
-)
-print(f"[OK] {len(cluster_configs)} clusters sauvegardés")
-for c in cluster_configs:
-    print(f"  • {c.get('cluster_name')} [{c.get('state')}] (id={c.get('cluster_id')})")
-
-# COMMAND ----------
-# MAGIC %md ## 5.3 — Backup ACLs Workspace (notebooks, dossiers)
+# MAGIC %md ## 5.1 — Backup ACLs Workspace (notebooks, dossiers)
 
 # COMMAND ----------
 def get_object_id(path):
@@ -181,7 +125,7 @@ dbutils.fs.put(
 print(f"[OK] ACLs sauvegardées → {output_path}/workspace_acls.json")
 
 # COMMAND ----------
-# MAGIC %md ## 5.4 — Backup ACLs Repos
+# MAGIC %md ## 5.2 — Backup ACLs Repos
 
 # COMMAND ----------
 resp = requests.get(f"{host}/api/2.0/repos", headers=headers, timeout=30)
@@ -210,22 +154,18 @@ dbutils.fs.put(
 print(f"[OK] {len(repos_acls)} repos sauvegardés avec leurs ACLs")
 
 # COMMAND ----------
-# MAGIC %md ## 5.5 — Résumé
+# MAGIC %md ## 5.3 — Résumé
 
 # COMMAND ----------
 summary = {
-    "cluster_policies_count": len(policies),
-    "clusters_count":         len(cluster_configs),
-    "workspace_acls_count":   len(acls_backup),
-    "repos_count":            len(repos_acls),
+    "workspace_acls_count": len(acls_backup),
+    "repos_count":          len(repos_acls),
 }
 
 print(f"""
 ╔══════════════════════════════════════════╗
 ║     WORKSPACE CONFIG BACKUP — RÉSUMÉ    ║
 ╠══════════════════════════════════════════╣
-║  Cluster policies : {len(policies):<21} ║
-║  Clusters         : {len(cluster_configs):<21} ║
 ║  ACLs workspace   : {len(acls_backup):<21} ║
 ║  Repos            : {len(repos_acls):<21} ║
 ╚══════════════════════════════════════════╝

@@ -10,13 +10,21 @@ import time
 from datetime import date
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup", "Backup root (abfss://...)")
-dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
-dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
+dbutils.widgets.text("backup_root",    "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup", "Backup root (abfss://...)")
+dbutils.widgets.text("backup_date",    str(date.today()), "Date backup YYYY-MM-DD")
+dbutils.widgets.text("lib_path",       "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
+dbutils.widgets.text("retain_daily",   "7",     "Rétention quotidienne (jours)")
+dbutils.widgets.text("retain_weekly",  "4",     "Rétention hebdomadaire (semaines)")
+dbutils.widgets.text("retain_monthly", "3",     "Rétention mensuelle (mois)")
+dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simulation)")
 
-backup_root = dbutils.widgets.get("backup_root")
-backup_date = dbutils.widgets.get("backup_date")
-lib_path = dbutils.widgets.get("lib_path")
+backup_root    = dbutils.widgets.get("backup_root")
+backup_date    = dbutils.widgets.get("backup_date")
+lib_path       = dbutils.widgets.get("lib_path")
+retain_daily   = dbutils.widgets.get("retain_daily")
+retain_weekly  = dbutils.widgets.get("retain_weekly")
+retain_monthly = dbutils.widgets.get("retain_monthly")
+dry_run        = dbutils.widgets.get("dry_run")
 
 steps = []
 global_status = "success"
@@ -49,7 +57,11 @@ def run_step(name, notebook_path, params, critical=False):
 # COMMAND ----------
 # DBTITLE 1, Étape 1 — UC Metadata (critique)
 
-base_params = {"backup_root": backup_root, "backup_date": backup_date, "lib_path": lib_path}
+base_params = {
+    "backup_root": backup_root,
+    "backup_date": backup_date,
+    "lib_path":    lib_path,
+}
 uc_result = run_step("uc_metadata", "./01_uc_metadata", base_params, critical=True)
 
 # COMMAND ----------
@@ -127,6 +139,18 @@ run_step("report", "./04_report", {
     "diff_json": "{}",
     "stats_json": json.dumps(stats),
     "steps_json": json.dumps(steps),
+}, critical=False)
+
+# COMMAND ----------
+# DBTITLE 1, Étape 5 — Retention (non critique)
+
+run_step("retention", "./06_retention", {
+    "backup_root":    backup_root,
+    "backup_date":    backup_date,
+    "retain_daily":   retain_daily,
+    "retain_weekly":  retain_weekly,
+    "retain_monthly": retain_monthly,
+    "dry_run":        dry_run,
 }, critical=False)
 
 # COMMAND ----------

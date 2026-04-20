@@ -19,8 +19,12 @@ tasks:
     notebook_task:
       notebook_path: ../notebooks/00_orchestrator.py
       base_parameters:
-        backup_root: ${var.backup_root}
-        lib_path:    ${var.lib_path}
+        backup_root:    ${var.backup_root}
+        lib_path:       ${var.lib_path}
+        retain_daily:   ${var.retain_daily}
+        retain_weekly:  ${var.retain_weekly}
+        retain_monthly: ${var.retain_monthly}
+        dry_run:        ${var.dry_run}
     email_notifications:
       on_failure:
         - ${var.notification_email}
