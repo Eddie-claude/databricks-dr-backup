@@ -40,7 +40,7 @@ def run_step(name, notebook_path, params, critical=False):
     global global_status
     start = time.time()
     try:
-        result = dbutils.notebook.run(notebook_path, timeout_seconds=7200, arguments=params)
+        result = dbutils.notebook.run(notebook_path, timeout_seconds=28800, arguments=params)
         duration = int(time.time() - start)
         steps.append({"name": name, "status": "success", "duration_s": duration})
         print(f"[OK] {name} ({duration}s)")

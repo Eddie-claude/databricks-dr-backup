@@ -1,232 +1,192 @@
 # Databricks notebook source
 # notebooks/demo/07_volume_booster.py
 #
-# OBJECTIF : Compléter les tables de test jusqu'à ~1 To en ajoutant des batches
-#            de données denses (valeurs réellement aléatoires par élément d'array).
+# OBJECTIF : Atteindre ~1 To de données de test en utilisant DEEP CLONE.
 #
-# POURQUOI le script initial n'a produit que ~78 Go au lieu de ~1 To ?
-#   array_repeat(hex(rand()), 18) évalue rand() UNE SEULE FOIS et répète
-#   18× la même valeur → compression Parquet quasi-parfaite → ×7 à ×13 de ratio.
-#   Ce notebook utilise transform(sequence(1, N), i -> hex(rand())) qui génère
-#   N valeurs DISTINCTES → données incompressibles → densité réelle.
+# POURQUOI DEEP CLONE et pas de génération Spark ?
+#   DEEP CLONE copie les fichiers Parquet côté serveur Azure (server-side copy)
+#   sans les lire ni les écrire via le cluster. Pour 36 Go : ~2 min au lieu
+#   de ~70 min avec une approche Spark write. Gain : ×35 sur le temps.
+#
+# STRATÉGIE :
+#   Cloner les 3 grandes tables (payments 36.8 Go, sensor_readings 26.2 Go,
+#   refunds 8.8 Go) N fois chacune, en round-robin, jusqu'à la cible.
+#   Les clones sont créés dans les mêmes schémas avec un suffixe _c01, _c02...
 
 # COMMAND ----------
-# MAGIC %md # 07 — Volume Booster (→ 1 To)
+# MAGIC %md # 07 — Volume Booster via DEEP CLONE (→ 1 To)
 # MAGIC
-# MAGIC Ce notebook complète les tables de test backup jusqu'à ~1 To.
+# MAGIC **Méthode** : `CREATE TABLE target DEEP CLONE source`
 # MAGIC
-# MAGIC **Stratégie** : append de batches denses sur les 2 tables volumineuses
-# MAGIC (`payments` et `sensor_readings`), puis complétion des autres.
+# MAGIC La copie est serveur-side (Azure Blob copy) — pas de lecture/écriture Spark.
 # MAGIC
-# MAGIC **Durée estimée** : ~3-5h selon le cluster
+# MAGIC | Table source | Taille | ×13 clones | Volume total |
+# MAGIC |---|---|---|---|
+# MAGIC | `payments` | 36.8 Go | +478 Go | 515 Go |
+# MAGIC | `sensor_readings` | 26.2 Go | +341 Go | 367 Go |
+# MAGIC | `refunds` | 8.8 Go | +114 Go | 123 Go |
+# MAGIC | Autres (existant) | 5.4 Go | — | 5.4 Go |
+# MAGIC | **Total estimé** | | | **~1 010 Go** |
 
 # COMMAND ----------
-from pyspark.sql import functions as F
 from datetime import datetime
 
-dbutils.widgets.text("target_gb",    "1024", "Cible totale en Go")
-dbutils.widgets.text("batch_rows",   "10000000", "Lignes par batch (défaut 10M)")
-dbutils.widgets.text("dry_run",      "false", "true = calcul uniquement, pas d'écriture")
+dbutils.widgets.text("target_gb",   "1024", "Cible totale en Go")
+dbutils.widgets.text("dry_run",     "false", "true = affiche les commandes sans les exécuter")
+dbutils.widgets.text("max_clones",  "15",   "Nombre max de clones par table source (garde-fou)")
 
 TARGET_GB  = int(dbutils.widgets.get("target_gb"))
-BATCH_ROWS = int(dbutils.widgets.get("batch_rows"))
 DRY_RUN    = dbutils.widgets.get("dry_run").lower() == "true"
+MAX_CLONES = int(dbutils.widgets.get("max_clones"))
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 def size_gb(table_fqn):
-    row = spark.sql(f"DESCRIBE DETAIL {table_fqn}").collect()[0]
-    return row["sizeInBytes"] / (1024**3), row["numFiles"]
+    try:
+        row = spark.sql(f"DESCRIBE DETAIL {table_fqn}").collect()[0]
+        return row["sizeInBytes"] / (1024**3)
+    except Exception:
+        return 0.0
 
-def total_gb():
-    tables = [
-        "backup_test_finance.transactions.payments",
-        "backup_test_finance.transactions.refunds",
-        "backup_test_finance.reporting.monthly_summary",
-        "backup_test_iot.raw.sensor_readings",
-        "backup_test_iot.processed.aggregates",
-        "backup_test_hr.employees.contracts",
-        "backup_test_hr.employees.payroll",
-        "backup_test_hr.audit.access_logs",
-        "backup_test_ref.geo.postal_codes",
-    ]
-    return sum(size_gb(t)[0] for t in tables)
+ALL_TABLES = [
+    "backup_test_finance.transactions.payments",
+    "backup_test_finance.transactions.refunds",
+    "backup_test_finance.reporting.monthly_summary",
+    "backup_test_iot.raw.sensor_readings",
+    "backup_test_iot.processed.aggregates",
+    "backup_test_hr.employees.contracts",
+    "backup_test_hr.employees.payroll",
+    "backup_test_hr.audit.access_logs",
+    "backup_test_ref.geo.postal_codes",
+] + [f"backup_test_ref.config.{n}" for n in [
+    "feature_flags", "rate_limits", "thresholds", "mappings",
+    "schedules", "templates", "rules", "parameters"
+]]
+
+def total_gb_all():
+    return sum(size_gb(t) for t in ALL_TABLES)
 
 # COMMAND ----------
-# MAGIC %md ## État actuel
+# MAGIC %md ## État initial
 
 # COMMAND ----------
-current_gb = total_gb()
-needed_gb  = TARGET_GB - current_gb
-log(f"Volume actuel : {current_gb:.1f} Go")
+start_gb = total_gb_all()
+needed   = TARGET_GB - start_gb
+
+log(f"Volume actuel : {start_gb:.1f} Go")
 log(f"Cible         : {TARGET_GB} Go")
-log(f"À générer     : {needed_gb:.1f} Go")
+log(f"À ajouter     : {needed:.1f} Go")
 log(f"Dry-run       : {DRY_RUN}")
 
-if needed_gb <= 0:
-    print(f"\n[OK] Cible déjà atteinte ({current_gb:.1f} Go >= {TARGET_GB} Go)")
+if needed <= 0:
+    print(f"\n[OK] Cible déjà atteinte ({start_gb:.1f} Go >= {TARGET_GB} Go)")
     dbutils.notebook.exit("already_at_target")
 
 # COMMAND ----------
-# MAGIC %md ## Fonctions de génération dense
+# MAGIC %md ## Boucle DEEP CLONE
 # MAGIC
-# MAGIC Différence clé : `transform(sequence(1, N), i -> expr)` évalue `expr`
-# MAGIC indépendamment pour chaque élément → N valeurs distinctes → pas de compression.
+# MAGIC Round-robin sur les 3 grandes tables, stop quand la cible est atteinte.
 
 # COMMAND ----------
 
-def gen_payments_dense(n_rows=BATCH_ROWS):
-    """
-    Payload de ~350 bytes/row non compressible.
-    array_repeat remplacé par transform(sequence()) → valeurs distinctes par élément.
-    """
-    return spark.range(n_rows).select(
-        F.expr("uuid()").alias("payment_id"),
-        F.expr("uuid()").alias("reference"),
-        F.expr("date_add('2019-01-01', cast(rand() * 2190 as int))").alias("payment_date"),
-        F.expr("element_at(array('FR','DE','CH','ES','IT','US','GB','NL','BE','PL'), cast(rand()*10+1 as int))").alias("country"),
-        F.expr("element_at(array('CARD','WIRE','SEPA','PAYPAL','CRYPTO'), cast(rand()*5+1 as int))").alias("method"),
-        F.expr("cast(rand() * 50000 as decimal(18,2))").alias("amount"),
-        F.expr("cast(rand() * 500000 as int)").alias("customer_id"),
-        F.expr("cast(rand() * 10000 as int)").alias("merchant_id"),
-        F.expr("element_at(array('SUCCESS','FAILED','PENDING','REFUNDED'), cast(rand()*4+1 as int))").alias("status"),
-        # Valeurs DISTINCTES par élément → incompressible
-        F.expr("transform(sequence(1, 20), i -> hex(rand()))").alias("payload"),
-        F.expr("transform(sequence(1, 10), i -> rand())").alias("amounts_history"),
-        F.expr("transform(sequence(1, 8),  i -> uuid())").alias("audit_trail"),
-    )
-
-def gen_sensor_dense(n_rows=BATCH_ROWS):
-    """Payload de ~280 bytes/row non compressible."""
-    return spark.range(n_rows).select(
-        F.expr("uuid()").alias("reading_id"),
-        F.expr("cast(rand() * 100000 as int)").alias("device_id"),
-        F.expr("element_at(array('TEMP','PRESSURE','HUMIDITY','FLOW','VOLTAGE','CURRENT'), cast(rand()*6+1 as int))").alias("device_type"),
-        F.expr("date_add('2021-01-01', cast(rand() * 1095 as int))").alias("reading_date"),
-        F.expr("to_timestamp(date_add('2021-01-01', cast(rand()*1095 as int)))").alias("reading_ts"),
-        F.expr("cast(rand() * 1000 as decimal(12,4))").alias("value"),
-        F.expr("cast(rand() * 100 as decimal(5,2))").alias("battery_pct"),
-        F.expr("element_at(array('OK','WARN','ERROR','OFFLINE'), cast(rand()*4+1 as int))").alias("status"),
-        F.expr("transform(sequence(1, 18), i -> hex(rand()))").alias("raw_payload"),
-        F.expr("transform(sequence(1, 6),  i -> rand())").alias("calibration_offsets"),
-        F.expr("struct(rand(), rand(), rand())").alias("geo_coords"),
-    )
-
-def gen_refunds_dense(n_rows=BATCH_ROWS):
-    """Payload ~200 bytes/row."""
-    return spark.range(n_rows).select(
-        F.expr("uuid()").alias("refund_id"),
-        F.expr("uuid()").alias("original_payment_ref"),
-        F.expr("date_add('2020-01-01', cast(rand() * 1825 as int))").alias("refund_date"),
-        F.expr("element_at(array('FR','DE','CH','ES','IT','US','GB'), cast(rand()*7+1 as int))").alias("country"),
-        F.expr("cast(rand() * 5000 as decimal(18,2))").alias("refund_amount"),
-        F.expr("element_at(array('CUSTOMER_REQUEST','FRAUD','TECHNICAL','DUPLICATE'), cast(rand()*4+1 as int))").alias("reason"),
-        F.expr("transform(sequence(1, 12), i -> hex(rand()))").alias("notes"),
-        F.expr("transform(sequence(1, 5),  i -> uuid())").alias("approvers"),
-    )
-
-# COMMAND ----------
-# MAGIC %md ## Boucle de remplissage
-# MAGIC
-# MAGIC Le notebook s'arrête automatiquement quand la cible est atteinte.
-
-# COMMAND ----------
-
-# Estimation de la taille par batch (mesurée empiriquement sur les fonctions denses)
-# ~0.35 Go/batch pour payments, ~0.28 Go pour sensor_readings, ~0.20 Go pour refunds
-BATCH_ESTIMATES = {
-    "payments":        0.35,   # Go par batch de 10M lignes
-    "sensor_readings": 0.28,
-    "refunds":         0.20,
-}
-
-# Ordre de priorité : les plus grandes tables d'abord (meilleur ratio volume/temps)
-TABLES_CONFIG = [
+# Sources à cloner, triées par taille décroissante pour maximiser le volume par clone
+CLONE_SOURCES = [
     {
-        "name":       "payments",
-        "fqn":        "backup_test_finance.transactions.payments",
-        "gen_fn":     gen_payments_dense,
-        "partition":  ["payment_date", "country"],
+        "src":          "backup_test_finance.transactions.payments",
+        "tgt_pattern":  "backup_test_finance.transactions.payments_c{n:02d}",
+        "est_gb":        36.8,
     },
     {
-        "name":       "sensor_readings",
-        "fqn":        "backup_test_iot.raw.sensor_readings",
-        "gen_fn":     gen_sensor_dense,
-        "partition":  ["reading_date", "device_type"],
+        "src":          "backup_test_iot.raw.sensor_readings",
+        "tgt_pattern":  "backup_test_iot.raw.sensor_readings_c{n:02d}",
+        "est_gb":        26.2,
     },
     {
-        "name":       "refunds",
-        "fqn":        "backup_test_finance.transactions.refunds",
-        "gen_fn":     gen_refunds_dense,
-        "partition":  ["refund_date", "country"],
+        "src":          "backup_test_finance.transactions.refunds",
+        "tgt_pattern":  "backup_test_finance.transactions.refunds_c{n:02d}",
+        "est_gb":        8.8,
+    },
+    {
+        "src":          "backup_test_iot.processed.aggregates",
+        "tgt_pattern":  "backup_test_iot.processed.aggregates_c{n:02d}",
+        "est_gb":        2.9,
     },
 ]
 
-batch_global = 0
+# Compteur de clones par source
+clone_counters = {cfg["src"]: 0 for cfg in CLONE_SOURCES}
+round_idx      = 0
+total_cloned   = 0.0
 
 while True:
-    current_gb = total_gb()
+    current_gb = start_gb + total_cloned   # estimation rapide (évite DESCRIBE DETAIL à chaque tour)
     remaining  = TARGET_GB - current_gb
 
-    log(f"─── Volume courant : {current_gb:.1f} Go | Restant : {remaining:.1f} Go ───")
-
     if remaining <= 0:
-        log(f"[DONE] Cible {TARGET_GB} Go atteinte !")
+        log(f"[DONE] Cible {TARGET_GB} Go atteinte (estimé : {current_gb:.1f} Go)")
         break
 
-    # Choisir la table à remplir (round-robin sur les 3)
-    cfg = TABLES_CONFIG[batch_global % len(TABLES_CONFIG)]
-    batch_global += 1
+    cfg = CLONE_SOURCES[round_idx % len(CLONE_SOURCES)]
+    round_idx += 1
 
-    estimated_add = BATCH_ESTIMATES[cfg["name"]]
-    log(f"  Batch {batch_global} → {cfg['name']} (+~{estimated_add:.2f} Go estimés)")
+    n   = clone_counters[cfg["src"]] + 1
+    tgt = cfg["tgt_pattern"].format(n=n)
 
-    if DRY_RUN:
-        log(f"  [DRY-RUN] Écriture simulée dans {cfg['fqn']}")
-        # En dry-run : simuler 3 batches puis sortir
-        if batch_global >= 3:
-            log("[DRY-RUN] Simulation terminée (3 batches)")
+    if n > MAX_CLONES:
+        log(f"[SKIP] {cfg['src']} : limite {MAX_CLONES} clones atteinte")
+        # Passer à la source suivante
+        if all(clone_counters[c["src"]] >= MAX_CLONES for c in CLONE_SOURCES):
+            log("[WARN] Toutes les sources ont atteint la limite MAX_CLONES. Arrêt.")
             break
         continue
 
-    df = cfg["gen_fn"](BATCH_ROWS)
-    writer = df.write.format("delta").mode("append")
-    if cfg["partition"]:
-        writer = writer.partitionBy(*cfg["partition"])
-    writer.saveAsTable(cfg["fqn"])
+    log(f"CLONE {n:02d} : {cfg['src']} → {tgt}  (+{cfg['est_gb']:.1f} Go estimés | restant : {remaining:.1f} Go)")
 
-    # Vérification réelle toutes les 5 batches (DESCRIBE DETAIL est lent)
-    if batch_global % 5 == 0:
-        gb_after, nf = size_gb(cfg["fqn"])
-        log(f"  → {cfg['name']} : {gb_after:.1f} Go | {nf:,} fichiers")
+    if DRY_RUN:
+        print(f"  [DRY-RUN] CREATE TABLE {tgt} DEEP CLONE {cfg['src']}")
+    else:
+        spark.sql(f"CREATE TABLE IF NOT EXISTS {tgt} DEEP CLONE {cfg['src']}")
+
+    clone_counters[cfg["src"]] = n
+    total_cloned += cfg["est_gb"]
 
 # COMMAND ----------
 # MAGIC %md ## Rapport final
 
 # COMMAND ----------
-all_tables = [
-    ("backup_test_finance", "transactions", "payments"),
-    ("backup_test_finance", "transactions", "refunds"),
-    ("backup_test_finance", "reporting",    "monthly_summary"),
-    ("backup_test_iot",     "raw",          "sensor_readings"),
-    ("backup_test_iot",     "processed",    "aggregates"),
-    ("backup_test_hr",      "employees",    "contracts"),
-    ("backup_test_hr",      "employees",    "payroll"),
-    ("backup_test_hr",      "audit",        "access_logs"),
-    ("backup_test_ref",     "geo",          "postal_codes"),
-] + [("backup_test_ref", "config", n) for n in [
-    "feature_flags", "rate_limits", "thresholds", "mappings",
-    "schedules", "templates", "rules", "parameters"
-]]
+# Scan réel pour le rapport (DESCRIBE DETAIL sur toutes les tables + clones)
+real_total = 0.0
+clone_rows = []
 
-total = 0
-print(f"\n{'Catalog':<25} {'Schema':<15} {'Table':<25} {'Go':>8} {'Fichiers':>10}")
-print("─" * 90)
-for cat, sch, tbl in all_tables:
-    gb, nf = size_gb(f"{cat}.{sch}.{tbl}")
-    total += gb
-    print(f"{cat:<25} {sch:<15} {tbl:<25} {gb:>7.1f} {nf:>10,}")
-print("─" * 90)
-print(f"{'TOTAL':<65} {total:>7.1f} Go")
-print(f"\n{'[OK]' if total >= TARGET_GB else '[WARN]'} Cible {TARGET_GB} Go : {total:.1f} Go générés")
+for cfg in CLONE_SOURCES:
+    src_gb = size_gb(cfg["src"])
+    real_total += src_gb
+    n_clones = clone_counters[cfg["src"]]
+    for i in range(1, n_clones + 1):
+        tgt = cfg["tgt_pattern"].format(n=i)
+        gb  = size_gb(tgt)
+        real_total += gb
+        clone_rows.append((tgt, gb))
+
+# Tables non-clonées
+other_tables = [t for t in ALL_TABLES
+                if not any(t == cfg["src"] for cfg in CLONE_SOURCES)]
+for t in other_tables:
+    gb = size_gb(t)
+    real_total += gb
+
+print(f"\n{'Table':<60} {'Go':>8}")
+print("─" * 72)
+for cfg in CLONE_SOURCES:
+    gb = size_gb(cfg["src"])
+    print(f"  {cfg['src']:<58} {gb:>7.1f}")
+    n_clones = clone_counters[cfg["src"]]
+    for i in range(1, n_clones + 1):
+        tgt = cfg["tgt_pattern"].format(n=i)
+        gb  = size_gb(tgt)
+        print(f"  {tgt:<58} {gb:>7.1f}  (clone)")
+
+print("─" * 72)
+print(f"  {'TOTAL':<58} {real_total:>7.1f} Go")
+print(f"\n{'[OK]' if real_total >= TARGET_GB else '[WARN]'} Cible {TARGET_GB} Go : {real_total:.1f} Go réels")
