@@ -33,16 +33,16 @@
 # MAGIC │                                      ┌──────────────────────────────────────┐   │
 # MAGIC │   ┌──────────────────┐               │  ADLS Gen2  (West Europe)            │   │
 # MAGIC │   │ Workspace Config │               │  st10keyitdpdrpdevwe00 / uc-data     │   │
-# MAGIC │   │ ├ Cluster Pol.   │──────────────▶│                                      │   │
-# MAGIC │   │ ├ Clusters       │  REST API     │  dr-backup/                          │   │
-# MAGIC │   │ ├ ACLs notebooks │               │  ├── latest.json                     │   │
-# MAGIC │   │ └ ACLs repos     │               │  └── YYYY-MM-DD/                     │   │
-# MAGIC │   └──────────────────┘               │      ├── uc_metadata/  *.sql         │   │
-# MAGIC │                                      │      ├── data/         Delta clones  │   │
-# MAGIC │   ┌──────────────────┐               │      ├── diff/         *.json        │   │
-# MAGIC │   │ Jobs / Notebooks │               │      ├── report/       *.html        │   │
-# MAGIC │   │ SQL Warehouses   │──────────────▶│      └── workspace_config/  *.json   │   │
-# MAGIC │   └──────────────────┘  REST API     └──────────────────────────────────────┘   │
+# MAGIC │   │ ├ ACLs notebooks │──────────────▶│                                      │   │
+# MAGIC │   │ └ ACLs repos     │  REST API     │  dr-backup/                          │   │
+# MAGIC │   └──────────────────┘               │  ├── latest.json                     │   │
+# MAGIC │                                      │  └── YYYY-MM-DD/                     │   │
+# MAGIC │   ┌──────────────────┐               │      ├── uc_metadata/  *.sql         │   │
+# MAGIC │   │ Jobs / Notebooks │──────────────▶│      ├── data/         Delta clones  │   │
+# MAGIC │   └──────────────────┘  REST API     │      ├── diff/         *.json        │   │
+# MAGIC │                                      │      ├── report/       *.html        │   │
+# MAGIC │                                      │      └── workspace_config/  *.json   │   │
+# MAGIC │                                      └──────────────────────────────────────┘   │
 # MAGIC │                                                          ▲                       │
 # MAGIC └──────────────────────────────────────────────────────────┼───────────────────────┘
 # MAGIC                                                            │
@@ -50,7 +50,7 @@
 # MAGIC            │  GitHub Actions  (CI/CD)                     ││
 # MAGIC            │  ├─ databricks bundle deploy  (DAB prod)     ││
 # MAGIC            │  ├─ export notebooks  (workspace export-dir) ││
-# MAGIC            │  └─ export jobs / warehouses  (REST API)  ───┘│
+# MAGIC            │  └─ export jobs  (REST API)               ───┘│
 # MAGIC            └──────────────────────────────────────────────┘
 # MAGIC
 # MAGIC ┌──────────────────────────────────────────────────────────────────────────────────┐
@@ -58,8 +58,8 @@
 # MAGIC │                                                                                  │
 # MAGIC │  restore_uc.py            → SQL DDL replay  (catalogs / schemas / tables / grants)│
 # MAGIC │  03_dr_scenario           → Delta DEEP CLONE depuis ADLS                         │
-# MAGIC │  restore_workspace_config → Cluster policies / Clusters / ACLs  (REST API)       │
-# MAGIC │  restore_workspace.py     → Jobs / Notebooks / SQL Warehouses   (REST API + CLI) │
+# MAGIC │  restore_workspace_config → ACLs notebooks / repos               (REST API)       │
+# MAGIC │  restore_workspace.py     → Jobs / Notebooks                     (REST API + CLI) │
 # MAGIC │  06_restore_workspace     → Demo dry-run depuis notebook (sans download local)   │
 # MAGIC └──────────────────────────────────────────────────────────────────────────────────┘
 # MAGIC ```
@@ -201,4 +201,4 @@ COMPORTEMENT EN CAS D'ERREUR PARTIELLE :
 # MAGIC ### Prochaines étapes recommandées
 # MAGIC 1. **Terraform** — provisionner le storage DR en Switzerland North (`st10keyitdpdrpdevchn00`)
 # MAGIC 2. **GitHub Actions** — configurer les secrets pour l'export workspace automatisé
-# MAGIC 3. **Phase 2** — couvrir les ACLs workspace, secrets, cluster policies
+# MAGIC 3. **Phase 2** — couvrir les secrets Databricks (scope/key backup)
