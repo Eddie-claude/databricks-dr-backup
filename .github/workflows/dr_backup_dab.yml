@@ -59,6 +59,18 @@ jobs:
           databricks bundle deploy \
             --target ${{ github.event.inputs.target || 'prod' }}
 
+      - name: Sync notebooks to workspace (chemin direct)
+        run: |
+          TARGET="${{ github.event.inputs.target || 'prod' }}"
+          if [ "$TARGET" = "prod" ]; then
+            WS_PATH="/Workspace/Shared/dr-backup/notebooks"
+          else
+            WS_PATH="/Workspace/Shared/dr-backup-dev/notebooks"
+          fi
+          echo "Synchronisation notebooks → $WS_PATH"
+          databricks workspace import-dir notebooks "$WS_PATH" --overwrite
+          echo "Synchronisation terminée"
+
       - name: Run job (optionnel)
         if: ${{ github.event.inputs.run_job == 'true' }}
         run: |
