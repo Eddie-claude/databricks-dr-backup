@@ -26,6 +26,9 @@ output_path = f"{backup_root}/{backup_date}/uc_metadata"
 # COMMAND ----------
 # DBTITLE 1, Export catalogs
 
+# information_schema = schéma système UC (vues uniquement, non cloneable)
+EXCLUDED_SCHEMAS = {"information_schema"}
+
 catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system")]
 catalog_ddl = "\n".join([f"CREATE CATALOG IF NOT EXISTS `{c}`;" for c in catalogs])
 
@@ -40,17 +43,37 @@ table_ddls = []
 table_names = []
 
 for catalog in catalogs:
-    # Cache des schemas pour ce catalog (une seule requête)
-    schemas = [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{catalog}`").collect()]
+    schemas = [
+        r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{catalog}`").collect()
+        if r.databaseName not in EXCLUDED_SCHEMAS
+    ]
     for schema in schemas:
         schema_ddls.append(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`;")
+
+        # Récupérer uniquement les tables cloneables (MANAGED/EXTERNAL, pas les vues)
+        try:
+            cloneable_tables = {
+                r.table_name for r in spark.sql(f"""
+                    SELECT table_name FROM `{catalog}`.information_schema.tables
+                    WHERE table_schema = '{schema}'
+                    AND table_type IN ('MANAGED', 'EXTERNAL')
+                """).collect()
+            }
+        except Exception as e:
+            print(f"[WARN] Fallback table_type pour {catalog}.{schema}: {e}")
+            cloneable_tables = None  # inclure tout, les vues seront filtrées dans 02_data_clone
+
         tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
         for t in tables:
             fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
             try:
                 ddl_row = spark.sql(f"SHOW CREATE TABLE {fqn}").collect()[0][0]
                 table_ddls.append(ddl_row + ";")
-                table_names.append(f"{catalog}.{schema}.{t.tableName}")
+                # Ajouter à la liste de clone uniquement si c'est une table réelle
+                if cloneable_tables is None or t.tableName in cloneable_tables:
+                    table_names.append(f"{catalog}.{schema}.{t.tableName}")
+                else:
+                    print(f"[SKIP] Vue ignorée pour le clone : {catalog}.{schema}.{t.tableName}")
             except Exception as e:
                 print(f"[WARN] Impossible d'exporter {fqn}: {e}")
 

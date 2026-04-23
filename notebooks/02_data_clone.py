@@ -81,13 +81,24 @@ for i, fqn in enumerate(pending_tables, 1):
 
     except Exception as e:
         elapsed = time.time() - t0
-        entry = {
-            "table":    fqn,
-            "status":   "error",
-            "error":    str(e),
-            "duration_s": round(elapsed, 1),
-        }
-        print(f"  ✗ ERREUR — {e}")
+        err_str = str(e)
+        # Vue ou format non supporté → skip (pas une vraie erreur de backup)
+        if "DELTA_CLONE_UNSUPPORTED_SOURCE" in err_str or "format is View" in err_str:
+            entry = {
+                "table":      fqn,
+                "status":     "skipped",
+                "reason":     "format non cloneable (vue ou non-Delta)",
+                "duration_s": round(elapsed, 1),
+            }
+            print(f"  [SKIP] Format non cloneable — {fqn}")
+        else:
+            entry = {
+                "table":      fqn,
+                "status":     "error",
+                "error":      err_str,
+                "duration_s": round(elapsed, 1),
+            }
+            print(f"  ✗ ERREUR — {e}")
 
     clone_results.append(entry)
     already_done[fqn] = entry
@@ -100,10 +111,12 @@ for i, fqn in enumerate(pending_tables, 1):
 dbutils.fs.put(clone_manifest_path, json.dumps(clone_results, indent=2), overwrite=True)
 
 success_count = len([r for r in clone_results if r["status"] == "success"])
+skip_count    = len([r for r in clone_results if r["status"] == "skipped"])
 error_count   = len([r for r in clone_results if r["status"] == "error"])
 
 print(f"\n[Résumé] {success_count} / {len(table_names)} tables clonées avec succès")
-print(f"[Résumé] {error_count} erreurs")
+print(f"[Résumé] {skip_count} tables ignorées (vues / format non supporté)")
+print(f"[Résumé] {error_count} erreurs réelles")
 print(f"[Résumé] Volume total : {total_size_gb:.2f} GB")
 
 if error_count > 0:
@@ -117,5 +130,6 @@ dbutils.notebook.exit(json.dumps({
     "clone_results":  clone_results,
     "total_size_gb":  round(total_size_gb, 3),
     "success_count":  success_count,
+    "skip_count":     skip_count,
     "error_count":    error_count,
 }))
