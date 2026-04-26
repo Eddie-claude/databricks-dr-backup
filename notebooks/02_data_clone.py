@@ -35,6 +35,27 @@ table_names = [
     if len(t.split(".")) == 3 and t.split(".")[1] not in _EXCLUDED_SCHEMAS
 ]
 
+# Fallback : si lancé sans orchestrateur, auto-découverte depuis Unity Catalog
+if not table_names:
+    print("[INFO] uc_metadata_result vide — auto-découverte des tables depuis Unity Catalog")
+    _EXCLUDED_CATALOGS = {"hive_metastore", "system"}
+    for _cat in [r.catalog for r in spark.sql("SHOW CATALOGS").collect()
+                 if r.catalog not in _EXCLUDED_CATALOGS]:
+        for _sch in [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{_cat}`").collect()
+                     if r.databaseName not in _EXCLUDED_SCHEMAS]:
+            try:
+                _tables = {
+                    r.table_name for r in spark.sql(f"""
+                        SELECT table_name FROM `{_cat}`.information_schema.tables
+                        WHERE table_schema = '{_sch}'
+                        AND table_type IN ('MANAGED', 'EXTERNAL')
+                    """).collect()
+                }
+                table_names += [f"{_cat}.{_sch}.{t}" for t in sorted(_tables)]
+            except Exception as _e:
+                print(f"[WARN] {_cat}.{_sch}: {_e}")
+    print(f"[INFO] {len(table_names)} tables découvertes automatiquement")
+
 data_backup_root    = f"{backup_root}/{backup_date}/data"
 clone_manifest_path = f"{backup_root}/{backup_date}/data/_clone_manifest.json"
 checkpoint_path     = f"{backup_root}/{backup_date}/data/_checkpoint.json"
