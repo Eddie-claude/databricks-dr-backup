@@ -22,7 +22,14 @@ backup_root  = dbutils.widgets.get("backup_root")
 backup_date  = dbutils.widgets.get("backup_date")
 uc_result    = json.loads(dbutils.widgets.get("uc_metadata_result"))
 resume_mode  = dbutils.widgets.get("resume").lower() == "true"
-table_names  = uc_result.get("table_names", [])
+
+# Schémas UC système : vues uniquement, non cloneables par DEEP CLONE
+_EXCLUDED_SCHEMAS = {"information_schema"}
+
+table_names = [
+    t for t in uc_result.get("table_names", [])
+    if len(t.split(".")) == 3 and t.split(".")[1] not in _EXCLUDED_SCHEMAS
+]
 
 data_backup_root     = f"{backup_root}/{backup_date}/data"
 clone_manifest_path  = f"{backup_root}/{backup_date}/data/_clone_manifest.json"
