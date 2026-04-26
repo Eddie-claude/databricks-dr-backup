@@ -29,7 +29,7 @@ output_path = f"{backup_root}/{backup_date}/uc_metadata"
 # information_schema = schéma système UC (vues uniquement, non cloneable)
 EXCLUDED_SCHEMAS = {"information_schema"}
 
-catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system")]
+catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system", "samples")]
 catalog_ddl = "\n".join([f"CREATE CATALOG IF NOT EXISTS `{c}`;" for c in catalogs])
 
 dbutils.fs.put(f"{output_path}/01_catalogs.sql", catalog_ddl, overwrite=True)

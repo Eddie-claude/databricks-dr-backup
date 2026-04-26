@@ -38,7 +38,7 @@ table_names = [
 # Fallback : si lancé sans orchestrateur, auto-découverte depuis Unity Catalog
 if not table_names:
     print("[INFO] uc_metadata_result vide — auto-découverte des tables depuis Unity Catalog")
-    _EXCLUDED_CATALOGS = {"hive_metastore", "system"}
+    _EXCLUDED_CATALOGS = {"hive_metastore", "system", "samples"}
     for _cat in [r.catalog for r in spark.sql("SHOW CATALOGS").collect()
                  if r.catalog not in _EXCLUDED_CATALOGS]:
         for _sch in [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{_cat}`").collect()
