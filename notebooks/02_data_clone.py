@@ -14,6 +14,24 @@ from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
 
+# dbutils.fs.put/head bypasse UC External Locations et exige une clé ABFS cluster.
+# Ces helpers passent par Spark (UC credentials) pour écrire/lire sur ADLS.
+def _uc_put(path: str, content: str) -> None:
+    tmp = path + ".__tmp__"
+    try: dbutils.fs.rm(tmp, recurse=True)
+    except: pass
+    spark.createDataFrame([(line,) for line in content.split("\n")], "value STRING") \
+        .coalesce(1).write.mode("overwrite").text(tmp)
+    parts = [f.path for f in dbutils.fs.ls(tmp)
+             if not f.name.startswith("_") and not f.name.startswith(".")]
+    try: dbutils.fs.rm(path)
+    except: pass
+    dbutils.fs.mv(parts[0], path)
+    dbutils.fs.rm(tmp, recurse=True)
+
+def _uc_head(path: str) -> str:
+    return "\n".join(r.value for r in spark.read.text(path).collect())
+
 # COMMAND ----------
 dbutils.widgets.text("backup_root",        "",               "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",        str(__import__('datetime').date.today()), "Date backup YYYY-MM-DD")
@@ -69,13 +87,13 @@ _checkpoint_lock = threading.Lock()
 
 def load_checkpoint():
     try:
-        return json.loads(dbutils.fs.head(checkpoint_path, 1_000_000))
+        return json.loads(_uc_head(checkpoint_path))
     except Exception:
         return {}
 
 def save_checkpoint(done: dict):
     with _checkpoint_lock:
-        dbutils.fs.put(checkpoint_path, json.dumps(done, indent=2), overwrite=True)
+        _uc_put(checkpoint_path, json.dumps(done, indent=2))
 
 already_done: dict = {}
 if resume_mode:
@@ -152,7 +170,7 @@ total_size_gb = sum(r.get("size_gb", 0) for r in clone_results)
 # COMMAND ----------
 # DBTITLE 1, Manifest final
 
-dbutils.fs.put(clone_manifest_path, json.dumps(clone_results, indent=2), overwrite=True)
+_uc_put(clone_manifest_path, json.dumps(clone_results, indent=2))
 
 success_count = len([r for r in clone_results if r["status"] == "success"])
 skip_count    = len([r for r in clone_results if r["status"] == "skipped"])

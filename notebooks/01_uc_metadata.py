@@ -11,6 +11,25 @@ from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()
 
+# dbutils.fs.put/head bypasse UC External Locations et exige une clé ABFS cluster.
+# Ces helpers passent par Spark (UC credentials) pour écrire/lire sur ADLS.
+def _uc_put(path: str, content: str, overwrite: bool = True) -> None:
+    tmp = path + ".__tmp__"
+    try: dbutils.fs.rm(tmp, recurse=True)
+    except: pass
+    spark.createDataFrame([(line,) for line in content.split("\n")], "value STRING") \
+        .coalesce(1).write.mode("overwrite").text(tmp)
+    parts = [f.path for f in dbutils.fs.ls(tmp)
+             if not f.name.startswith("_") and not f.name.startswith(".")]
+    if overwrite:
+        try: dbutils.fs.rm(path)
+        except: pass
+    dbutils.fs.mv(parts[0], path)
+    dbutils.fs.rm(tmp, recurse=True)
+
+def _uc_head(path: str) -> str:
+    return "\n".join(r.value for r in spark.read.text(path).collect())
+
 # COMMAND ----------
 # DBTITLE 1, Paramètres
 dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
@@ -32,7 +51,7 @@ EXCLUDED_SCHEMAS = {"information_schema"}
 catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system", "samples")]
 catalog_ddl = "\n".join([f"CREATE CATALOG IF NOT EXISTS `{c}`;" for c in catalogs])
 
-dbutils.fs.put(f"{output_path}/01_catalogs.sql", catalog_ddl, overwrite=True)
+_uc_put(f"{output_path}/01_catalogs.sql", catalog_ddl)
 print(f"[01_catalogs] {len(catalogs)} catalogs exportés : {catalogs}")
 
 # COMMAND ----------
@@ -77,10 +96,10 @@ for catalog in catalogs:
             except Exception as e:
                 print(f"[WARN] Impossible d'exporter {fqn}: {e}")
 
-dbutils.fs.put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls), overwrite=True)
+_uc_put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls))
 print(f"[02_schemas] {len(schema_ddls)} schemas exportés")
 
-dbutils.fs.put(f"{output_path}/03_tables.sql", "\n\n".join(table_ddls), overwrite=True)
+_uc_put(f"{output_path}/03_tables.sql", "\n\n".join(table_ddls))
 print(f"[03_tables] {len(table_ddls)} tables exportées")
 
 # COMMAND ----------
@@ -116,7 +135,7 @@ for catalog in catalogs:
             except Exception as e:
                 print(f"[WARN] Grants table {fqn_plain}: {e}")
 
-dbutils.fs.put(f"{output_path}/04_grants.sql", "\n".join(grant_statements), overwrite=True)
+_uc_put(f"{output_path}/04_grants.sql", "\n".join(grant_statements))
 print(f"[04_grants] {len(grant_statements)} grants exportés")
 
 # COMMAND ----------
