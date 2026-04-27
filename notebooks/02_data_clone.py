@@ -83,7 +83,10 @@ print(f"[INFO] max_parallel={max_parallel} | tables={len(table_names)} | resume=
 # COMMAND ----------
 # DBTITLE 1, Checkpoint (lecture + écriture thread-safe)
 
-_checkpoint_lock = threading.Lock()
+_checkpoint_lock  = threading.Lock()
+_checkpoint_dirty = threading.Event()
+_checkpoint_count = 0
+CHECKPOINT_EVERY  = 5  # écrire sur ADLS toutes les N tables
 
 def load_checkpoint():
     try:
@@ -92,6 +95,13 @@ def load_checkpoint():
         return {}
 
 def save_checkpoint(done: dict):
+    global _checkpoint_count
+    with _checkpoint_lock:
+        _checkpoint_count += 1
+        if _checkpoint_count % CHECKPOINT_EVERY == 0:
+            _uc_put(checkpoint_path, json.dumps(done, indent=2))
+
+def flush_checkpoint(done: dict):
     with _checkpoint_lock:
         _uc_put(checkpoint_path, json.dumps(done, indent=2))
 
@@ -162,6 +172,8 @@ args_list = [(i + 1, fqn) for i, fqn in enumerate(pending_tables)]
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor:
     new_results = list(executor.map(clone_one, args_list))
+
+flush_checkpoint(already_done)  # garantit l'écriture finale
 
 # Résultats complets (checkpoint précédent + nouveau run)
 clone_results = list(already_done.values())
