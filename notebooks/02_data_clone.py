@@ -134,14 +134,19 @@ def clone_one(args: tuple) -> dict:
         )
         metrics = result.collect()[0].asDict()
         elapsed = time.time() - t0
-        size_gb = metrics.get("num_output_bytes", 0) / (1024**3)
+        size_gb = (
+            metrics.get("copied_files_size") or
+            metrics.get("num_output_bytes") or
+            metrics.get("source_table_size") or 0
+        ) / (1024**3)
         entry   = {
-            "table":      fqn,
-            "status":     "success",
-            "size_gb":    round(size_gb, 4),
-            "duration_s": round(elapsed, 1),
+            "table":        fqn,
+            "status":       "success",
+            "size_gb":      round(size_gb, 4),
+            "num_files":    metrics.get("num_copied_files", 0),
+            "duration_s":   round(elapsed, 1),
         }
-        print(f"  ✓ {fqn} — {size_gb:.2f} GB en {elapsed:.0f}s")
+        print(f"  ✓ {fqn} — {size_gb:.2f} GB ({entry['num_files']} fichiers) en {elapsed:.0f}s")
 
     except Exception as e:
         elapsed = time.time() - t0
