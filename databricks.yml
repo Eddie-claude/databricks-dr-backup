@@ -14,13 +14,13 @@ variables:
     default: "efi@keyit.ch"
   retain_daily:
     description: "Rétention quotidienne : nombre de jours à conserver intégralement"
-    default: "7"
+    default: "15"
   retain_weekly:
     description: "Rétention hebdomadaire : nombre de semaines (1 backup/semaine)"
-    default: "4"
+    default: "2"
   retain_monthly:
     description: "Rétention mensuelle : nombre de mois (1 backup/mois)"
-    default: "3"
+    default: "1"
   dry_run:
     description: "Dry-run retention (true = simulation, aucune suppression)"
     default: "false"
