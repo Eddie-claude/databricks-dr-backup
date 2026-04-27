@@ -10,7 +10,7 @@ import time
 from datetime import date
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root",    "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup", "Backup root (abfss://...)")
+dbutils.widgets.text("backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",    str(date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("lib_path",       "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 dbutils.widgets.text("retain_daily",   "7",     "Rétention quotidienne (jours)")

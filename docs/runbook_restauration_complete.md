@@ -25,7 +25,7 @@ Il distingue deux scénarios :
 - [ ] Python 3.9+ + `pip install requests`
 - [ ] AzCopy installé (pour télécharger le backup depuis ADLS)
 - [ ] PAT Token valide sur le workspace cible
-- [ ] Accès en lecture sur `st10keyitdpdrpdevwe00` (container `uc-data`)
+- [ ] Accès en lecture sur `st10keyitdpdrpdevchn00` (container `uc-data`)
 
 ---
 
@@ -33,11 +33,11 @@ Il distingue deux scénarios :
 
 ```bash
 # Lister les backups disponibles
-azcopy list "https://st10keyitdpdrpdevwe00.dfs.core.windows.net/uc-data/dr-backup" \
+azcopy list "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/dr-backup" \
     --recursive=false
 
 # Vérifier le dernier backup validé
-azcopy cat "https://st10keyitdpdrpdevwe00.dfs.core.windows.net/uc-data/dr-backup/latest.json"
+azcopy cat "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/dr-backup/latest.json"
 ```
 
 Retient la date `BACKUP_DATE` (ex: `2026-04-07`).
@@ -51,7 +51,7 @@ export BACKUP_DATE=2026-04-07
 export LOCAL_BACKUP=/tmp/dr-restore/$BACKUP_DATE
 
 azcopy sync \
-    "https://st10keyitdpdrpdevwe00.dfs.core.windows.net/uc-data/dr-backup/$BACKUP_DATE" \
+    "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/dr-backup/$BACKUP_DATE" \
     "$LOCAL_BACKUP" \
     --recursive
 ```
@@ -85,7 +85,7 @@ export DATABRICKS_TOKEN=dapiXXXX
 # Restaurer catalogs + schemas + tables + grants (SQL replay)
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
+    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
 ```
 
 > ⚠️ Le script utilise `databricks sql execute` statement par statement.  
@@ -148,7 +148,7 @@ databricks configure --host $DATABRICKS_HOST --token $DATABRICKS_TOKEN
 ```bash
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
+    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
 ```
 
 Ordre d'exécution automatique :
@@ -164,7 +164,7 @@ Ordre d'exécution automatique :
 Depuis un notebook Databricks sur le nouveau workspace :
 
 ```python
-backup_root = "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
+backup_root = "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
 backup_date = "2026-04-07"
 
 clone_manifest = json.loads(dbutils.fs.head(f"{backup_root}/{backup_date}/data/_clone_manifest.json"))
@@ -294,7 +294,7 @@ databricks workspace ls /Shared
 
 ## 5. Contacts et ressources
 
-- Backup ADLS : `st10keyitdpdrpdevwe00.dfs.core.windows.net/uc-data/dr-backup/`
+- Backup ADLS : `st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/dr-backup/`
 - Workspace Databricks : `https://adb-2547670924000766.6.azuredatabricks.net`
 - Repo GitHub : `https://github.com/Eddie-claude/databricks-dr-backup`
 - Subscription Azure : `sub-keyIT-prd-dataplatform-01`

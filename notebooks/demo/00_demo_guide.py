@@ -32,7 +32,7 @@
 # MAGIC │   └──────────────────┘                                  ▼                       │
 # MAGIC │                                      ┌──────────────────────────────────────┐   │
 # MAGIC │   ┌──────────────────┐               │  ADLS Gen2  (West Europe)            │   │
-# MAGIC │   │ Workspace Config │               │  st10keyitdpdrpdevwe00 / uc-data     │   │
+# MAGIC │   │ Workspace Config │               │  st10keyitdpdrpdevchn00 / uc-data     │   │
 # MAGIC │   │ ├ ACLs notebooks │──────────────▶│                                      │   │
 # MAGIC │   │ └ ACLs repos     │  REST API     │  dr-backup/                          │   │
 # MAGIC │   └──────────────────┘               │  ├── latest.json                     │   │
@@ -91,7 +91,7 @@
 # COMMAND ----------
 import json
 
-backup_root = "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup"
+backup_root = "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
 
 latest = json.loads(dbutils.fs.head(f"{backup_root}/latest.json"))
 

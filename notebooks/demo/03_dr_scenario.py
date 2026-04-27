@@ -19,7 +19,7 @@
 # MAGIC %md ## 4.1 — Paramètres
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevwe00.dfs.core.windows.net/dr-backup", "Backup root")
+dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup", "Backup root")
 dbutils.widgets.text("backup_date", "", "Date du backup à restaurer (vide = dernier, YYYY-MM-DD pour choisir)")
 
 backup_root = dbutils.widgets.get("backup_root")
