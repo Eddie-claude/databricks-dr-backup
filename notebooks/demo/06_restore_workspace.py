@@ -18,7 +18,7 @@
 # MAGIC %md ## 7.1 — Paramètres
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup", "Backup root")
+dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root")
 dbutils.widgets.text("backup_date", "", "Date du backup (vide = dernier)")
 dbutils.widgets.dropdown("dry_run", "true", ["true", "false"], "Mode dry-run (simulation)")
 dbutils.widgets.dropdown("restore_scope", "jobs_only", ["jobs_only", "jobs_and_notebooks", "all"], "Périmètre de restauration")

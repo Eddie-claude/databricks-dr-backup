@@ -6,7 +6,7 @@ depuis un backup ADLS.
 
 Usage:
     python restore_workspace_config.py \
-        --backup-path abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup/2026-04-05 \
+        --backup-path abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup/2026-04-05 \
         --host https://adb-xxx.azuredatabricks.net \
         --token dapiXXXX \
         [--restore-acls] \

@@ -85,7 +85,7 @@ export DATABRICKS_TOKEN=dapiXXXX
 # Restaurer catalogs + schemas + tables + grants (SQL replay)
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
+    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
 ```
 
 > ⚠️ Le script utilise `databricks sql execute` statement par statement.  
@@ -148,7 +148,7 @@ databricks configure --host $DATABRICKS_HOST --token $DATABRICKS_TOKEN
 ```bash
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
+    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
 ```
 
 Ordre d'exécution automatique :
@@ -164,7 +164,7 @@ Ordre d'exécution automatique :
 Depuis un notebook Databricks sur le nouveau workspace :
 
 ```python
-backup_root = "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
+backup_root = "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
 backup_date = "2026-04-07"
 
 clone_manifest = json.loads(dbutils.fs.head(f"{backup_root}/{backup_date}/data/_clone_manifest.json"))

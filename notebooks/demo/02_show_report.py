@@ -15,7 +15,7 @@
 # MAGIC %md ## 3.1 — Paramètres
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup", "Backup root")
+dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root")
 dbutils.widgets.text("backup_date", "", "Date du rapport (vide = dernier)")
 
 backup_root = dbutils.widgets.get("backup_root")

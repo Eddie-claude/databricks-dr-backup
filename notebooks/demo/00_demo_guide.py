@@ -91,7 +91,7 @@
 # COMMAND ----------
 import json
 
-backup_root = "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/dr-backup"
+backup_root = "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
 
 latest = json.loads(dbutils.fs.head(f"{backup_root}/latest.json"))
 
