@@ -8,14 +8,30 @@
 import json
 import time
 from datetime import date
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.getOrCreate()
+
+def _uc_put(path: str, content: str) -> None:
+    tmp = path + ".__tmp__"
+    try: dbutils.fs.rm(tmp, recurse=True)
+    except: pass
+    spark.createDataFrame([(line,) for line in content.split("\n")], "value STRING") \
+        .coalesce(1).write.mode("overwrite").text(tmp)
+    parts = [f.path for f in dbutils.fs.ls(tmp)
+             if not f.name.startswith("_") and not f.name.startswith(".")]
+    try: dbutils.fs.rm(path)
+    except: pass
+    dbutils.fs.mv(parts[0], path)
+    dbutils.fs.rm(tmp, recurse=True)
 
 # COMMAND ----------
 dbutils.widgets.text("backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",    str(date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("lib_path",       "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
-dbutils.widgets.text("retain_daily",   "7",     "Rétention quotidienne (jours)")
-dbutils.widgets.text("retain_weekly",  "4",     "Rétention hebdomadaire (semaines)")
-dbutils.widgets.text("retain_monthly", "3",     "Rétention mensuelle (mois)")
+dbutils.widgets.text("retain_daily",   "15",    "Rétention quotidienne (jours)")
+dbutils.widgets.text("retain_weekly",  "2",     "Rétention hebdomadaire (semaines)")
+dbutils.widgets.text("retain_monthly", "1",     "Rétention mensuelle (mois)")
 dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simulation)")
 
 backup_root    = dbutils.widgets.get("backup_root")
@@ -84,7 +100,7 @@ current_manifest = {
 }
 
 manifest_path = f"{backup_root}/{backup_date}/manifest.json"
-dbutils.fs.put(manifest_path, json.dumps(current_manifest, indent=2), overwrite=True)
+_uc_put(manifest_path, json.dumps(current_manifest, indent=2))
 print(f"[OK] Manifest écrit : {manifest_path}")
 
 # COMMAND ----------
@@ -109,7 +125,7 @@ except Exception as e:
     print(f"[WARN] Impossible de lister les notebooks: {e}")
 
 # Réécrire le manifest complété
-dbutils.fs.put(manifest_path, json.dumps(current_manifest, indent=2), overwrite=True)
+_uc_put(manifest_path, json.dumps(current_manifest, indent=2))
 print(f"[OK] Manifest complété : {manifest_path}")
 
 # COMMAND ----------
