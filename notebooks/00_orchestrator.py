@@ -86,6 +86,8 @@ uc_result = run_step("uc_metadata", "./01_uc_metadata", base_params, critical=Tr
 clone_result = run_step("data_clone", "./02_data_clone", {
     **base_params,
     "uc_metadata_result": json.dumps(uc_result),
+    "retain_daily":       retain_daily,
+    "retain_weekly":      retain_weekly,
 }, critical=True)
 
 # COMMAND ----------
@@ -178,6 +180,6 @@ latest = {
     "status": global_status,
     "steps_summary": {s["name"]: s["status"] for s in steps},
 }
-dbutils.fs.put(f"{backup_root}/latest.json", json.dumps(latest, indent=2), overwrite=True)
+_uc_put(f"{backup_root}/latest.json", json.dumps(latest, indent=2))
 
 print(f"\n[DR Backup] Terminé — {backup_date} — statut: {global_status}")

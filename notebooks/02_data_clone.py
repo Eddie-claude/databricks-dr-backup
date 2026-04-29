@@ -38,12 +38,18 @@ dbutils.widgets.text("backup_date",        str(__import__('datetime').date.today
 dbutils.widgets.text("uc_metadata_result", "{}",             "JSON result from 01_uc_metadata")
 dbutils.widgets.text("resume",             "true",           "Reprendre depuis checkpoint (true/false)")
 dbutils.widgets.text("max_parallel",       "4",              "Clones simultanés (1 = séquentiel)")
+dbutils.widgets.text("retain_daily",       "15",             "Rétention quotidienne (jours) — Delta log")
+dbutils.widgets.text("retain_weekly",      "2",              "Rétention hebdomadaire (semaines) — VACUUM")
 
-backup_root  = dbutils.widgets.get("backup_root")
-backup_date  = dbutils.widgets.get("backup_date")
-uc_result    = json.loads(dbutils.widgets.get("uc_metadata_result"))
-resume_mode  = dbutils.widgets.get("resume").lower() == "true"
-max_parallel = max(1, int(dbutils.widgets.get("max_parallel")))
+backup_root        = dbutils.widgets.get("backup_root")
+backup_date        = dbutils.widgets.get("backup_date")
+uc_result          = json.loads(dbutils.widgets.get("uc_metadata_result"))
+resume_mode        = dbutils.widgets.get("resume").lower() == "true"
+max_parallel       = max(1, int(dbutils.widgets.get("max_parallel")))
+retain_daily       = max(1, int(dbutils.widgets.get("retain_daily")))
+retain_weekly      = max(1, int(dbutils.widgets.get("retain_weekly")))
+# Fichiers supprimés conservés assez longtemps pour que les SHALLOW CLONEs weekly restent valides
+max_file_retention = max(retain_daily, retain_weekly * 7) + 2
 
 # Schémas UC système : vues uniquement, non cloneables par DEEP CLONE
 _EXCLUDED_SCHEMAS = {"information_schema"}
@@ -74,9 +80,9 @@ if not table_names:
                 print(f"[WARN] {_cat}.{_sch}: {_e}")
     print(f"[INFO] {len(table_names)} tables découvertes automatiquement")
 
-data_backup_root    = f"{backup_root}/{backup_date}/data"
-clone_manifest_path = f"{backup_root}/{backup_date}/data/_clone_manifest.json"
-checkpoint_path     = f"{backup_root}/{backup_date}/data/_checkpoint.json"
+data_backup_root    = f"{backup_root}/incremental"
+clone_manifest_path = f"{backup_root}/incremental/_manifests/{backup_date}.json"
+checkpoint_path     = f"{backup_root}/incremental/_checkpoints/{backup_date}.json"
 
 print(f"[INFO] max_parallel={max_parallel} | tables={len(table_names)} | resume={resume_mode}")
 
@@ -139,14 +145,26 @@ def clone_one(args: tuple) -> dict:
             metrics.get("num_output_bytes") or
             metrics.get("source_table_size") or 0
         ) / (1024**3)
-        entry   = {
+        num_files = metrics.get("num_copied_files", 0)
+        entry = {
             "table":        fqn,
             "status":       "success",
             "size_gb":      round(size_gb, 4),
-            "num_files":    metrics.get("num_copied_files", 0),
+            "num_files":    num_files,
             "duration_s":   round(elapsed, 1),
+            "incremental":  num_files == 0,
         }
-        print(f"  ✓ {fqn} — {size_gb:.2f} GB ({entry['num_files']} fichiers) en {elapsed:.0f}s")
+        suffix = " (aucun changement)" if num_files == 0 else f" — {size_gb:.2f} GB ({num_files} fichiers)"
+        print(f"  ✓ {fqn}{suffix} en {elapsed:.0f}s")
+        try:
+            spark.sql(f"""
+              ALTER TABLE delta.`{dest}` SET TBLPROPERTIES (
+                'delta.logRetentionDuration'         = 'interval {retain_daily + 1} days',
+                'delta.deletedFileRetentionDuration' = 'interval {max_file_retention} days'
+              )
+            """)
+        except Exception as _e:
+            print(f"  [WARN] Propriétés Delta non définies sur {dest}: {_e}")
 
     except Exception as e:
         elapsed = time.time() - t0
