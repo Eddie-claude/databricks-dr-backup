@@ -29,18 +29,20 @@ from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
 
 # COMMAND ----------
-dbutils.widgets.text("max_parallel",          "8",     "Threads parallèles pour DESCRIBE DETAIL")
-dbutils.widgets.text("optimize_files_thresh", "200",   "Seuil fichiers → OPTIMIZE recommandé")
-dbutils.widgets.text("output_json",           "false", "Afficher JSON complet (true/false)")
+dbutils.widgets.text("max_parallel",           "8",     "Threads parallèles pour DESCRIBE DETAIL")
+dbutils.widgets.text("optimize_files_per_gb",  "50",   "Seuil fichiers/GB → OPTIMIZE recommandé")
+dbutils.widgets.text("optimize_files_min",     "100",  "Nb fichiers minimum pour déclencher le flag (évite les faux positifs sur tables vides)")
+dbutils.widgets.text("output_json",            "false", "Afficher JSON complet (true/false)")
 
 max_parallel          = max(1, int(dbutils.widgets.get("max_parallel")))
-optimize_files_thresh = int(dbutils.widgets.get("optimize_files_thresh"))
+optimize_files_per_gb = float(dbutils.widgets.get("optimize_files_per_gb"))
+optimize_files_min    = int(dbutils.widgets.get("optimize_files_min"))
 output_json           = dbutils.widgets.get("output_json").lower() == "true"
 
 EXCLUDED_CATALOGS = {"hive_metastore", "system", "samples", "__databricks_internal"}
 EXCLUDED_SCHEMAS  = {"information_schema"}
 
-print(f"[OK] max_parallel={max_parallel} | seuil OPTIMIZE={optimize_files_thresh} fichiers")
+print(f"[OK] max_parallel={max_parallel} | seuil OPTIMIZE={optimize_files_per_gb} fichiers/GB (min {optimize_files_min} fichiers)")
 print(f"[OK] Démarré à {datetime.now().strftime('%H:%M:%S')}")
 
 # COMMAND ----------
@@ -136,9 +138,11 @@ delta_size_gb  = sum(r["size_gb"]  for r in delta_ok)
 delta_files    = sum(r["num_files"] for r in delta_ok)
 
 # Tables nécessitant OPTIMIZE
+# Double condition : ratio fichiers/GB élevé ET nombre minimum absolu
+# → fonctionne aussi bien pour les petites que les très grosses tables
 optimize_needed = [
     r for r in delta_ok
-    if r["num_files"] > optimize_files_thresh
+    if r["files_per_gb"] > optimize_files_per_gb and r["num_files"] >= optimize_files_min
 ]
 optimize_size_gb = sum(r["size_gb"]  for r in optimize_needed)
 optimize_files   = sum(r["num_files"] for r in optimize_needed)
@@ -189,7 +193,7 @@ print(f"""
 ║    Total tables Delta      : {delta_size_gb:>10.2f} GB                    ║
 ║    Nombre de fichiers total : {total_files:>10,}                   ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  OPTIMIZE — PETITS FICHIERS (seuil : {optimize_files_thresh} fichiers/table)
+║  OPTIMIZE — PETITS FICHIERS (seuil : >{optimize_files_per_gb} fichiers/GB et >={optimize_files_min} fichiers)
 ║    Tables à optimiser      : {len(optimize_needed):<5}                           ║
 ║    Volume concerné         : {optimize_size_gb:>10.2f} GB                    ║
 ║    Fichiers à compacter    : {optimize_files:>10,}                   ║
@@ -213,13 +217,13 @@ print(f"{'─'*90}")
 print(f"{'Catalog.Schema.Table':<52} {'Format':<8} {'GB':>8} {'Fichiers':>10} {'Fichiers/GB':>12} {'OPTIMIZE':>9}")
 print(f"{'─'*90}")
 for r in top_tables:
-    flag = "⚠ OUI" if r["num_files"] > optimize_files_thresh else ""
+    flag = "⚠ OUI" if (r["files_per_gb"] > optimize_files_per_gb and r["num_files"] >= optimize_files_min) else ""
     print(f"{r['fqn']:<52} {r['format']:<8} {r['size_gb']:>8.2f} {r['num_files']:>10,} {r['files_per_gb']:>12.1f} {flag:>9}")
 
 # ── Tables nécessitant OPTIMIZE ───────────────────────────────────────────────
 if optimize_needed:
     print(f"\n{'─'*80}")
-    print(f"{'TABLES NÉCESSITANT OPTIMIZE (> ' + str(optimize_files_thresh) + ' fichiers)':^80}")
+    print(f"{'TABLES NÉCESSITANT OPTIMIZE (>' + str(optimize_files_per_gb) + ' fichiers/GB, >=' + str(optimize_files_min) + ' fichiers)':^80}")
     print(f"{'─'*80}")
     print(f"{'Catalog.Schema.Table':<52} {'GB':>8} {'Fichiers':>10} {'Fichiers/GB':>10}")
     print(f"{'─'*80}")
