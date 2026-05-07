@@ -41,6 +41,8 @@ retain_daily   = dbutils.widgets.get("retain_daily")
 retain_weekly  = dbutils.widgets.get("retain_weekly")
 retain_monthly = dbutils.widgets.get("retain_monthly")
 dry_run        = dbutils.widgets.get("dry_run")
+# Snapshot mensuel désactivé dans le job daily — géré par le job dr-backup-monthly
+ENABLE_MONTHLY = "false"
 
 steps = []
 global_status = "success"
@@ -169,6 +171,7 @@ run_step("retention", "./06_retention", {
     "retain_weekly":  retain_weekly,
     "retain_monthly": retain_monthly,
     "dry_run":        dry_run,
+    "enable_monthly": ENABLE_MONTHLY,
 }, critical=False)
 
 # COMMAND ----------

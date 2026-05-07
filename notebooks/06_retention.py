@@ -33,23 +33,25 @@ dbutils.widgets.text("retain_weekly",   "2",           "Rétention hebdomadaire 
 dbutils.widgets.text("retain_monthly",  "1",           "Rétention mensuelle (mois)")
 dbutils.widgets.text("dry_run",         "false",       "Simulation (true = aucune écriture/suppression)")
 dbutils.widgets.text("max_parallel",    "4",           "Clones parallèles pour les snapshots")
-dbutils.widgets.text("force_snapshot",  "false",       "Forcer création snapshots quel que soit le jour")
+dbutils.widgets.text("force_snapshot",  "false",       "Forcer weekly+monthly quel que soit le jour (tests)")
+dbutils.widgets.text("enable_monthly",  "false",       "Activer snapshot mensuel — false dans le job daily, true dans dr-backup-monthly")
 
-backup_root    = dbutils.widgets.get("backup_root")
-backup_date    = dbutils.widgets.get("backup_date")
-retain_daily   = int(dbutils.widgets.get("retain_daily"))
-retain_weekly  = int(dbutils.widgets.get("retain_weekly"))
-retain_monthly = int(dbutils.widgets.get("retain_monthly"))
-dry_run        = dbutils.widgets.get("dry_run").lower()        == "true"
-max_parallel   = max(1, int(dbutils.widgets.get("max_parallel")))
-force_snapshot = dbutils.widgets.get("force_snapshot").lower() == "true"
+backup_root     = dbutils.widgets.get("backup_root")
+backup_date     = dbutils.widgets.get("backup_date")
+retain_daily    = int(dbutils.widgets.get("retain_daily"))
+retain_weekly   = int(dbutils.widgets.get("retain_weekly"))
+retain_monthly  = int(dbutils.widgets.get("retain_monthly"))
+dry_run         = dbutils.widgets.get("dry_run").lower()         == "true"
+max_parallel    = max(1, int(dbutils.widgets.get("max_parallel")))
+force_snapshot  = dbutils.widgets.get("force_snapshot").lower()  == "true"
+enable_monthly  = dbutils.widgets.get("enable_monthly").lower()  == "true"
 
 today            = date.fromisoformat(backup_date)
 incremental_root = f"{backup_root}/incremental"
 weekly_root      = f"{backup_root}/snapshots/weekly"
 monthly_root     = f"{backup_root}/snapshots/monthly"
 
-print(f"[OK] daily={retain_daily}j | weekly={retain_weekly}sem | monthly={retain_monthly}mois | dry_run={dry_run} | force={force_snapshot}")
+print(f"[OK] daily={retain_daily}j | weekly={retain_weekly}sem | monthly={retain_monthly}mois | dry_run={dry_run} | force={force_snapshot} | enable_monthly={enable_monthly}")
 
 # COMMAND ----------
 # MAGIC %md ## 6.1 — Liste des tables depuis le manifest du jour
@@ -126,7 +128,9 @@ else:
 
 # COMMAND ----------
 month_label = today.strftime("%Y-%m")
-do_monthly  = (today.day == 1) or force_snapshot
+# enable_monthly=false dans le job daily → mensuel jamais exécuté ici
+# enable_monthly=true dans le job dr-backup-monthly → exécuté le 1er du mois (ou force_snapshot)
+do_monthly  = enable_monthly and ((today.day == 1) or force_snapshot)
 
 monthly_results = []
 
