@@ -17,10 +17,10 @@ variables:
     default: "15"
   retain_weekly:
     description: "Rétention hebdomadaire : nombre de semaines (1 backup/semaine)"
-    default: "2"
+    default: "4"
   retain_monthly:
     description: "Rétention mensuelle : nombre de mois (1 backup/mois)"
-    default: "1"
+    default: "3"
   dry_run:
     description: "Dry-run retention (true = simulation, aucune suppression)"
     default: "false"
@@ -53,7 +53,7 @@ resources:
           new_cluster:
             spark_version: "17.3.x-scala2.13"
             node_type_id: "Standard_DS3_v2"
-            num_workers: 4
+            num_workers: 0
             data_security_mode: "SINGLE_USER"
             spark_conf:
               spark.master: "local[*, 8]"
@@ -94,14 +94,9 @@ resources:
         - task_key: monthly_snapshot
           new_cluster:
             spark_version: "17.3.x-scala2.13"
-            node_type_id: "Standard_DS4_v2"     # 8 cores — plus puissant pour 17 TB
+            node_type_id: "Standard_DS4_v2"
             num_workers: 4
             data_security_mode: "SINGLE_USER"
-            spark_conf:
-              spark.master: "local[*, 8]"
-              spark.databricks.cluster.profile: "singleNode"
-            custom_tags:
-              ResourceClass: "SingleNode"
           timeout_seconds: 86400   # 24h — couvre le DEEP CLONE de 17 TB
           notebook_task:
             notebook_path: ./notebooks/06_retention.py
