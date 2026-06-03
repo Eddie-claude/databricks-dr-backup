@@ -49,7 +49,7 @@ dbutils.widgets.text(     "notebook_filter",   "", "Filtre chemin notebook (ex: 
 dbutils.widgets.text(     "target_workspace_path", "", "Dossier cible workspace (vide = chemin d'origine)")
 dbutils.widgets.dropdown( "dry_run",           "true", ["true", "false"], "Dry-run (true = simulation)")
 
-backup_root           = dbutils.widgets.get("backup_root").rstrip("/")
+backup_root           = dbutils.widgets.get("backup_root").strip().rstrip("/")
 backup_date           = dbutils.widgets.get("backup_date").strip()
 restore_type          = dbutils.widgets.get("restore_type")
 notebook_filter       = dbutils.widgets.get("notebook_filter").strip()
@@ -81,7 +81,8 @@ def list_backup_dates(root):
             f.name.rstrip("/") for f in dbutils.fs.ls(root)
             if DATE_PAT.match(f.name.rstrip("/"))
         ], reverse=True)
-    except Exception:
+    except Exception as e:
+        print(f"  [WARN] list_backup_dates échoué: {e}")
         return []
 
 available_dates = list_backup_dates(backup_root)
@@ -107,15 +108,15 @@ def list_notebook_files(adls_root):
     files = []
     def recurse(path):
         try:
-            for f in dbutils.fs.ls(path):
-                if f.name.endswith("/"):
-                    recurse(f.path.rstrip("/"))
-                else:
-                    name = f.name
-                    if any(name.endswith(ext) for ext in lang_map):
-                        files.append(f.path)
-        except Exception:
-            pass
+            items = list(dbutils.fs.ls(path))
+        except Exception as e:
+            print(f"  [WARN] ls échoué sur {path}: {e}")
+            return
+        for f in items:
+            if f.name.endswith("/"):
+                recurse(f.path.rstrip("/"))
+            elif any(f.name.endswith(ext) for ext in lang_map):
+                files.append(f.path)
     recurse(adls_root)
     return files
 
