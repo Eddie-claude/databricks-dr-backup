@@ -233,7 +233,6 @@ if restore_type in ("acls", "both"):
     for entry in acls_data:
         ws_path   = entry.get("path", "")
         obj_type  = entry.get("object_type", "")
-        obj_id    = entry.get("object_id")
         acl       = entry.get("acl", [])
         perm_type = type_map_inv.get(obj_type)
 
@@ -242,25 +241,49 @@ if restore_type in ("acls", "both"):
             acl_nb_skip += 1
             continue
 
-        if not perm_type or not obj_id or not acl:
+        if not perm_type or not ws_path or not acl:
             acl_nb_skip += 1
             continue
 
         print(f"\n  {'──' if dry_run else '▶ '} {ws_path}  [{obj_type}]")
 
         if not dry_run:
+            # Résoudre l'object_id courant depuis le chemin workspace
+            # (l'ID stocké dans le backup est périmé si l'objet a été recréé)
+            try:
+                status_r = requests.get(
+                    f"{host}/api/2.0/workspace/get-status",
+                    headers=headers,
+                    params={"path": ws_path},
+                    timeout=10,
+                )
+                if status_r.status_code == 404:
+                    print(f"     [SKIP] Objet introuvable dans le workspace : {ws_path}")
+                    acl_nb_skip += 1
+                    continue
+                status_r.raise_for_status()
+                current_id = status_r.json().get("object_id")
+                if not current_id:
+                    print(f"     [SKIP] object_id introuvable via get-status pour {ws_path}")
+                    acl_nb_skip += 1
+                    continue
+            except Exception as e:
+                print(f"     [SKIP] get-status échoué pour {ws_path} : {e}")
+                acl_nb_skip += 1
+                continue
+
             try:
                 r = requests.put(
-                    f"{host}/api/2.0/permissions/{perm_type}/{obj_id}",
+                    f"{host}/api/2.0/permissions/{perm_type}/{current_id}",
                     headers=headers,
                     json={"access_control_list": acl},
                     timeout=15
                 )
                 if r.ok:
-                    print(f"     [OK] ACL restaurée")
+                    print(f"     [OK] ACL restaurée (object_id={current_id})")
                     acl_nb_ok += 1
                 else:
-                    print(f"     [WARN] {r.status_code} — {r.text[:100]}")
+                    print(f"     [WARN] {r.status_code} — {r.text[:150]}")
                     acl_nb_error += 1
             except Exception as e:
                 print(f"     [ERROR] {e}")

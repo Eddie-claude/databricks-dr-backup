@@ -6,8 +6,7 @@
 # MAGIC # 🔄 Acte 7 — Restauration Jobs & Notebooks
 # MAGIC
 # MAGIC Ce notebook restaure depuis ADLS (sans téléchargement local) :
-# MAGIC - **Jobs Databricks** : recréation via REST API depuis `jobs.json`
-# MAGIC - **SQL Warehouses** : recréation depuis `sql_warehouses.json`
+# MAGIC - **Jobs Databricks** : recréation via REST API depuis `jobs/jobs_all.json`
 # MAGIC - **Notebooks** : ré-import depuis le backup workspace
 # MAGIC
 # MAGIC Modes disponibles : `dry_run=True` (simulation) ou `dry_run=False` (applique)
@@ -18,18 +17,22 @@
 # MAGIC %md ## 7.1 — Paramètres
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root")
-dbutils.widgets.text("backup_date", "", "Date du backup (vide = dernier)")
-dbutils.widgets.dropdown("dry_run", "true", ["true", "false"], "Mode dry-run (simulation)")
-dbutils.widgets.dropdown("restore_scope", "jobs_only", ["jobs_only", "jobs_and_notebooks", "all"], "Périmètre de restauration")
+dbutils.widgets.text(    "backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root")
+dbutils.widgets.text(    "backup_date",    "", "Date du backup (vide = dernier)")
+dbutils.widgets.dropdown("dry_run",        "true", ["true", "false"], "Mode dry-run (simulation)")
+dbutils.widgets.dropdown("restore_scope",  "jobs_only", ["jobs_only", "jobs_and_notebooks"], "Périmètre de restauration")
 
-backup_root  = dbutils.widgets.get("backup_root")
-backup_date  = dbutils.widgets.get("backup_date")
-dry_run      = dbutils.widgets.get("dry_run") == "true"
+backup_root   = dbutils.widgets.get("backup_root")
+backup_date   = dbutils.widgets.get("backup_date")
+dry_run       = dbutils.widgets.get("dry_run") == "true"
 restore_scope = dbutils.widgets.get("restore_scope")
 
 import json
+import base64
 import requests
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.getOrCreate()
 
 # Auth session courante
 token   = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
@@ -41,8 +44,10 @@ if not backup_date:
     backup_date = latest["date"]
     print(f"[AUTO] Date backup : {backup_date}")
 
-workspace_backup = f"{backup_root}/{backup_date}/workspace"
-print(f"[OK] Backup source   : {workspace_backup}")
+jobs_backup_path = f"{backup_root}/{backup_date}/jobs/jobs_all.json"
+
+print(f"[OK] Backup root     : {backup_root}")
+print(f"[OK] Date backup     : {backup_date}")
 print(f"[OK] Mode dry-run    : {dry_run}")
 print(f"[OK] Périmètre       : {restore_scope}")
 
@@ -50,8 +55,13 @@ print(f"[OK] Périmètre       : {restore_scope}")
 # MAGIC %md ## 7.2 — Helpers
 
 # COMMAND ----------
+def _uc_head(path: str) -> str:
+    """Lit un fichier texte depuis ADLS (UC-aware, via Spark)."""
+    return "\n".join(r.value for r in spark.read.text(path).collect())
+
+
 def list_all_jobs():
-    """Liste tous les jobs existants (avec pagination)."""
+    """Liste tous les jobs existants sur le workspace (avec pagination)."""
     jobs = []
     params = {"limit": 100}
     while True:
@@ -66,16 +76,18 @@ def list_all_jobs():
 
 
 def is_dab_job(settings):
-    """Détecte un job géré par Databricks Asset Bundles."""
+    """Détecte un job géré par Databricks Asset Bundles (ne pas recréer manuellement)."""
     tags = settings.get("tags", {})
     return "bundle" in tags or any(k.startswith("databricks.bundle") for k in tags)
 
 
 def clean_job_settings(settings):
-    """Supprime les champs read-only avant création."""
-    skip = {"job_id", "creator_user_name", "created_time",
-            "run_as_user_name", "effective_budget_policy_id",
-            "run_as", "settings_schema_version"}
+    """Supprime les champs read-only avant création via API."""
+    skip = {
+        "job_id", "creator_user_name", "created_time",
+        "run_as_user_name", "effective_budget_policy_id",
+        "run_as", "settings_schema_version",
+    }
     return {k: v for k, v in settings.items() if k not in skip}
 
 
@@ -89,36 +101,39 @@ print("=" * 60)
 if dry_run:
     print("⚠️  MODE DRY-RUN — aucun job ne sera créé\n")
 
-jobs_path = f"{workspace_backup}/jobs.json"
-
 try:
-    jobs_backup = json.loads(dbutils.fs.head(jobs_path, 10_000_000))
-    print(f"  {len(jobs_backup)} jobs trouvés dans le backup\n")
+    jobs_backup = json.loads(_uc_head(jobs_backup_path))
+    print(f"  {len(jobs_backup)} job(s) trouvé(s) dans le backup ({backup_date})\n")
 
-    # Index des jobs existants
     existing = {j["settings"]["name"]: j["job_id"] for j in list_all_jobs()}
-    print(f"  {len(existing)} jobs actuellement dans le workspace\n")
+    print(f"  {len(existing)} job(s) actuellement dans le workspace\n")
 
     ok = skip_dab = skip_exists = err = 0
+    id_mapping = []
 
     for job_entry in jobs_backup:
         settings = job_entry.get("settings", job_entry)
-        name = settings.get("name", f"job_{job_entry.get('job_id', '?')}")
+        name   = settings.get("name", f"job_{job_entry.get('job_id', '?')}")
+        old_id = job_entry.get("job_id", "?")
+        tasks  = settings.get("tasks", [])
 
-        # Skip jobs DAB
         if is_dab_job(settings):
             print(f"  ⏭ [DAB]   {name}  → géré par bundle, ignoré")
             skip_dab += 1
             continue
 
-        # Skip si déjà existant
         if name in existing:
             print(f"  ⏭ [EXIST] {name}  → déjà présent (id={existing[name]})")
             skip_exists += 1
             continue
 
         if dry_run:
-            print(f"  🔵 [DRY]  {name}  → serait créé")
+            schedule_info = ""
+            if settings.get("schedule"):
+                cron = settings["schedule"].get("quartz_cron_expression", "")
+                tz   = settings["schedule"].get("timezone_id", "")
+                schedule_info = f"  [{cron} {tz}]"
+            print(f"  🔵 [DRY]  {name}  ({len(tasks)} tâche(s)){schedule_info}  → serait créé")
             ok += 1
             continue
 
@@ -127,7 +142,8 @@ try:
 
         if resp.ok:
             new_id = resp.json().get("job_id")
-            print(f"  ✅ [OK]   {name}  → créé (id={new_id})")
+            print(f"  ✅ [OK]   {name}  → créé (ancien id={old_id}, nouveau id={new_id})")
+            id_mapping.append((name, old_id, new_id))
             ok += 1
         else:
             try:
@@ -146,74 +162,29 @@ try:
     Erreurs       : {err}
   ─────────────────────────────────────""")
 
-except Exception as e:
-    print(f"[ERROR] Impossible de charger jobs.json : {e}")
-
-# COMMAND ----------
-# MAGIC %md ## 7.4 — Restauration SQL Warehouses
-
-# COMMAND ----------
-print("=" * 60)
-print("RESTAURATION SQL WAREHOUSES")
-print("=" * 60)
-if dry_run:
-    print("⚠️  MODE DRY-RUN — aucun warehouse ne sera créé\n")
-
-wh_path = f"{workspace_backup}/sql_warehouses.json"
-
-try:
-    wh_backup = json.loads(dbutils.fs.head(wh_path, 1_000_000))
-
-    # Warehouses existants
-    wh_existing = {w["name"]: w["id"]
-                   for w in requests.get(f"{host}/api/2.0/sql/warehouses",
-                                         headers=headers, timeout=30
-                                        ).json().get("warehouses", [])}
-
-    skip_fields = {"id", "state", "num_active_sessions", "creator_name",
-                   "jdbc_url", "odbc_params", "health", "num_clusters"}
-
-    ok = skip = err = 0
-    for wh in wh_backup:
-        name = wh.get("name", "unknown")
-
-        if name in wh_existing:
-            print(f"  ⏭ [EXIST] {name}  → déjà présent")
-            skip += 1
-            continue
-
-        if dry_run:
-            print(f"  🔵 [DRY]  {name} ({wh.get('cluster_size', '?')})  → serait créé")
-            ok += 1
-            continue
-
-        payload = {k: v for k, v in wh.items() if k not in skip_fields and v is not None}
-        resp = requests.post(f"{host}/api/2.0/sql/warehouses", headers=headers, json=payload, timeout=30)
-
-        if resp.ok:
-            print(f"  ✅ [OK]   {name}  → créé (id={resp.json().get('id')})")
-            ok += 1
-        else:
-            print(f"  ❌ [ERR]  {name}  → {resp.text[:100]}")
-            err += 1
-
-    print(f"\n  {'[DRY-RUN] ' if dry_run else ''}Résultat warehouses : {ok} {'créeraient' if dry_run else 'créés'} | {skip} ignorés | {err} erreurs")
+    if id_mapping:
+        print("\n  Mapping job_id :")
+        print(f"  {'Nom':<40} {'Ancien ID':>10} {'Nouveau ID':>10}")
+        print(f"  {'─'*40} {'─'*10} {'─'*10}")
+        for name, old, new in id_mapping:
+            print(f"  {name:<40} {str(old):>10} {str(new):>10}")
 
 except Exception as e:
-    print(f"[INFO] sql_warehouses.json non disponible : {e}")
+    print(f"[ERROR] Impossible de charger jobs_all.json : {e}")
+    print(f"        Chemin vérifié : {jobs_backup_path}")
 
 # COMMAND ----------
-# MAGIC %md ## 7.5 — Restauration Notebooks (via REST API)
+# MAGIC %md ## 7.4 — Restauration Notebooks (via REST API)
 
 # COMMAND ----------
-if restore_scope in ("jobs_and_notebooks", "all"):
+if restore_scope == "jobs_and_notebooks":
     print("=" * 60)
     print("RESTAURATION NOTEBOOKS WORKSPACE")
     print("=" * 60)
     if dry_run:
         print("⚠️  MODE DRY-RUN — aucun notebook ne sera importé\n")
 
-    nb_backup_path = f"{workspace_backup}/notebooks"
+    nb_backup_path = f"{backup_root}/{backup_date}/notebooks"
     target_dir = "/Shared/dr-restore"
 
     try:
@@ -243,24 +214,19 @@ if restore_scope in ("jobs_and_notebooks", "all"):
                 print(f"  ... ({len(nb_files) - 10} fichiers supplémentaires)")
             print(f"\n  [DRY-RUN] {len(nb_files)} notebooks seraient importés vers {target_dir}")
         else:
-            # Import via API workspace/import (base64)
-            import base64
-            ok = skip = err = 0
+            ok = err = 0
             for nb_file in nb_files:
-                rel_path = nb_file.path.replace(nb_backup_path, "").rstrip("/")
+                rel_path  = nb_file.path.replace(nb_backup_path, "").rstrip("/")
                 dest_path = f"{target_dir}{rel_path}"
                 try:
-                    content_bytes = dbutils.fs.head(nb_file.path, 10_000_000).encode("utf-8")
-                    content_b64 = base64.b64encode(content_bytes).decode("utf-8")
+                    content_b64 = base64.b64encode(
+                        "\n".join(r.value for r in spark.read.text(nb_file.path).collect()).encode("utf-8")
+                    ).decode("utf-8")
                     resp = requests.post(
                         f"{host}/api/2.0/workspace/import",
                         headers=headers,
-                        json={
-                            "path": dest_path,
-                            "content": content_b64,
-                            "overwrite": True,
-                            "format": "SOURCE",
-                        },
+                        json={"path": dest_path, "content": content_b64,
+                              "overwrite": True, "format": "SOURCE"},
                         timeout=30,
                     )
                     if resp.ok:
@@ -281,7 +247,7 @@ else:
     print("       Changer restore_scope = 'jobs_and_notebooks' pour l'activer")
 
 # COMMAND ----------
-# MAGIC %md ## 7.6 — Synthèse
+# MAGIC %md ## 7.5 — Synthèse
 
 # COMMAND ----------
 print(f"""

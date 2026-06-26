@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 scripts/restore_workspace_config.py
-Restaure les ACLs workspace, cluster policies et configurations clusters
-depuis un backup ADLS.
+Restaure les ACLs workspace et repos Git depuis un backup ADLS.
 
 Usage:
     python restore_workspace_config.py \
@@ -10,8 +9,6 @@ Usage:
         --host https://adb-xxx.azuredatabricks.net \
         --token dapiXXXX \
         [--restore-acls] \
-        [--restore-policies] \
-        [--restore-clusters] \
         [--dry-run]
 """
 
@@ -35,16 +32,6 @@ def api_get(host, token, path, params=None):
     return r.json()
 
 
-def api_post(host, token, path, payload):
-    r = requests.post(
-        f"{host}{path}",
-        headers={"Authorization": f"Bearer {token}"},
-        json=payload,
-        timeout=30,
-    )
-    return r
-
-
 def api_put(host, token, path, payload):
     r = requests.put(
         f"{host}{path}",
@@ -62,95 +49,6 @@ def load_backup_file(backup_path, filename):
         raise FileNotFoundError(f"Fichier backup non trouvé : {filepath}")
     with open(filepath) as f:
         return json.load(f)
-
-
-# ── Restore Cluster Policies ──────────────────────────────────────────────────
-
-def restore_cluster_policies(host, token, policies, dry_run=False):
-    print("\n=== RESTAURATION CLUSTER POLICIES ===")
-
-    # Récupérer les policies existantes
-    existing = {p["name"]: p["policy_id"]
-                for p in api_get(host, token, "/api/2.0/policies/clusters/list").get("policies", [])}
-
-    ok = skip = err = 0
-    for policy in policies:
-        name = policy.get("name", "")
-        definition = policy.get("definition", "{}")
-
-        if name in existing:
-            print(f"  ⏭ [SKIP] Policy déjà existante : {name}")
-            skip += 1
-            continue
-
-        if dry_run:
-            print(f"  [DRY-RUN] Créerait policy : {name}")
-            ok += 1
-            continue
-
-        payload = {"name": name, "definition": definition}
-        if policy.get("description"):
-            payload["description"] = policy["description"]
-        if policy.get("max_clusters_per_user"):
-            payload["max_clusters_per_user"] = policy["max_clusters_per_user"]
-
-        resp = api_post(host, token, "/api/2.0/policies/clusters/create", payload)
-        if resp.ok:
-            print(f"  ✅ Policy créée : {name}")
-            ok += 1
-        else:
-            print(f"  ❌ Erreur policy {name}: {resp.text[:150]}")
-            err += 1
-
-    print(f"\n  Résultat : {ok} créées | {skip} déjà existantes | {err} erreurs")
-    return err
-
-
-# ── Restore Cluster Configs ───────────────────────────────────────────────────
-
-def restore_clusters(host, token, clusters, dry_run=False):
-    print("\n=== RESTAURATION CLUSTERS ===")
-
-    existing_names = {c["cluster_name"]
-                      for c in api_get(host, token, "/api/2.0/clusters/list").get("clusters", [])}
-
-    ok = skip = err = 0
-    for cluster in clusters:
-        name   = cluster.get("cluster_name", "")
-        source = cluster.get("cluster_source", "")
-
-        # Ne pas recréer les clusters gérés par Databricks (UI, Jobs...)
-        if source in ("JOB", "PIPELINE", "MODELS"):
-            print(f"  ⏭ [SKIP] Cluster géré automatiquement : {name} (source={source})")
-            skip += 1
-            continue
-
-        if name in existing_names:
-            print(f"  ⏭ [SKIP] Cluster déjà existant : {name}")
-            skip += 1
-            continue
-
-        if dry_run:
-            print(f"  [DRY-RUN] Créerait cluster : {name}")
-            ok += 1
-            continue
-
-        # Construire le payload de création
-        payload = {k: v for k, v in cluster.items()
-                   if k not in ("cluster_id", "state", "cluster_source")
-                   and v is not None}
-
-        resp = api_post(host, token, "/api/2.0/clusters/create", payload)
-        if resp.ok:
-            new_id = resp.json().get("cluster_id")
-            print(f"  ✅ Cluster créé : {name} (new_id={new_id})")
-            ok += 1
-        else:
-            print(f"  ❌ Erreur cluster {name}: {resp.text[:150]}")
-            err += 1
-
-    print(f"\n  Résultat : {ok} créés | {skip} ignorés | {err} erreurs")
-    return err
 
 
 # ── Restore Workspace ACLs ────────────────────────────────────────────────────
@@ -176,7 +74,6 @@ def restore_workspace_acls(host, token, acls_backup, dry_run=False):
             skip += 1
             continue
 
-        # Résoudre le path → nouvel object_id sur ce workspace
         try:
             status = api_get(host, token, "/api/2.0/workspace/get-status", {"path": path})
             new_id = status.get("object_id")
@@ -190,7 +87,6 @@ def restore_workspace_acls(host, token, acls_backup, dry_run=False):
             ok += 1
             continue
 
-        # Construire le payload ACL (uniquement les permissions non héritées)
         acl_list = []
         for entry_acl in acl:
             principal = (entry_acl.get("user_name")
@@ -232,7 +128,6 @@ def restore_workspace_acls(host, token, acls_backup, dry_run=False):
 def restore_repos_acls(host, token, repos_acls, dry_run=False):
     print("\n=== RESTAURATION ACLs REPOS ===")
 
-    # Récupérer les repos existants sur le workspace cible
     existing_repos = {r["path"]: r["id"]
                       for r in api_get(host, token, "/api/2.0/repos").get("repos", [])}
 
@@ -289,14 +184,12 @@ def restore_repos_acls(host, token, repos_acls, dry_run=False):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Restore workspace config from DR backup")
+    parser = argparse.ArgumentParser(description="Restore workspace ACLs from DR backup")
     parser.add_argument("--backup-path", required=True,
                         help="Chemin local vers le répertoire de backup (ex: ./backup/2026-04-05)")
     parser.add_argument("--host",  required=True, help="Databricks workspace URL")
     parser.add_argument("--token", required=True, help="Databricks PAT token")
-    parser.add_argument("--restore-acls",     action="store_true", help="Restaurer les ACLs workspace")
-    parser.add_argument("--restore-policies", action="store_true", help="Restaurer les cluster policies")
-    parser.add_argument("--restore-clusters", action="store_true", help="Restaurer les clusters")
+    parser.add_argument("--restore-acls", action="store_true", help="Restaurer les ACLs workspace et repos")
     parser.add_argument("--dry-run", action="store_true",
                         help="Simuler sans appliquer les changements")
     args = parser.parse_args()
@@ -304,20 +197,11 @@ def main():
     if args.dry_run:
         print("[DRY-RUN] Mode simulation — aucun changement ne sera appliqué\n")
 
-    if not any([args.restore_acls, args.restore_policies, args.restore_clusters]):
-        print("Aucune option de restauration spécifiée. Utilisez --restore-acls, "
-              "--restore-policies ou --restore-clusters")
+    if not args.restore_acls:
+        print("Aucune option de restauration spécifiée. Utilisez --restore-acls")
         sys.exit(1)
 
     total_errors = 0
-
-    if args.restore_policies:
-        policies = load_backup_file(args.backup_path, "cluster_policies.json")
-        total_errors += restore_cluster_policies(args.host, args.token, policies, args.dry_run)
-
-    if args.restore_clusters:
-        clusters = load_backup_file(args.backup_path, "clusters.json")
-        total_errors += restore_clusters(args.host, args.token, clusters, args.dry_run)
 
     if args.restore_acls:
         acls = load_backup_file(args.backup_path, "workspace_acls.json")

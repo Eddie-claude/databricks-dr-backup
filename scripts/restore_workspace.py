@@ -10,7 +10,6 @@ Usage:
         --token dapiXXXX \
         [--restore-jobs] \
         [--restore-notebooks] \
-        [--restore-warehouses] \
         [--target-dir /Shared/dr-restore] \
         [--skip-dab-jobs] \
         [--dry-run]
@@ -83,18 +82,11 @@ def list_all_jobs(host, token):
 def is_dab_job(job_settings):
     """Détecte si un job est géré par Databricks Asset Bundles."""
     tags = job_settings.get("tags", {})
-    # DAB ajoute le tag 'bundle' avec les métadonnées de déploiement
-    return "bundle" in tags or any(
-        k.startswith("databricks.bundle") for k in tags
-    )
+    return "bundle" in tags or any(k.startswith("databricks.bundle") for k in tags)
 
 
 def clean_job_settings(settings):
-    """
-    Nettoie les settings d'un job pour la recréation :
-    - Supprime les champs read-only (job_id, creator, create_time...)
-    - Conserve uniquement les champs requis par /api/2.1/jobs/create
-    """
+    """Nettoie les settings d'un job pour la recréation via API."""
     readonly_fields = {
         "job_id", "creator_user_name", "created_time",
         "run_as_user_name", "effective_budget_policy_id",
@@ -106,22 +98,18 @@ def clean_job_settings(settings):
 def restore_jobs(host, token, jobs_backup, dry_run=False, skip_dab=True):
     print("\n=== RESTAURATION JOBS ===")
 
-    # Index des jobs existants par nom
     existing = {j["settings"]["name"]: j["job_id"] for j in list_all_jobs(host, token)}
 
     ok = skip = err = 0
     for job_entry in jobs_backup:
-        # Le backup peut contenir soit {"settings": {...}} soit directement les settings
         settings = job_entry.get("settings", job_entry)
         name = settings.get("name", f"job_{job_entry.get('job_id', '?')}")
 
-        # Skip jobs DAB
         if skip_dab and is_dab_job(settings):
             print(f"  ⏭ [SKIP-DAB] Job géré par bundle : {name}")
             skip += 1
             continue
 
-        # Skip si déjà existant
         if name in existing:
             print(f"  ⏭ [SKIP] Job déjà existant : {name} (id={existing[name]})")
             skip += 1
@@ -154,10 +142,7 @@ def restore_jobs(host, token, jobs_backup, dry_run=False, skip_dab=True):
 # ── Restore Notebooks ─────────────────────────────────────────────────────────
 
 def restore_notebooks(backup_path, host, token, target_dir="/Shared/dr-restore", dry_run=False):
-    """
-    Importe les notebooks depuis le backup local vers le workspace.
-    Utilise le Databricks CLI : databricks workspace import-dir
-    """
+    """Importe les notebooks depuis le backup local vers le workspace via le Databricks CLI."""
     print("\n=== RESTAURATION NOTEBOOKS ===")
 
     notebooks_dir = Path(backup_path) / "workspace" / "notebooks"
@@ -165,7 +150,6 @@ def restore_notebooks(backup_path, host, token, target_dir="/Shared/dr-restore",
         print(f"  [SKIP] Dossier notebooks introuvable : {notebooks_dir}")
         return 0
 
-    # Compter les fichiers
     nb_files = list(notebooks_dir.rglob("*"))
     nb_count = sum(1 for f in nb_files if f.is_file())
     print(f"  Notebooks à importer : {nb_count} fichiers depuis {notebooks_dir}")
@@ -175,18 +159,8 @@ def restore_notebooks(backup_path, host, token, target_dir="/Shared/dr-restore",
         print(f"  [DRY-RUN] Importerait {nb_count} fichiers vers {target_dir}")
         return 0
 
-    env = {
-        **os.environ,
-        "DATABRICKS_HOST": host,
-        "DATABRICKS_TOKEN": token,
-    }
-
-    cmd = [
-        "databricks", "workspace", "import-dir",
-        str(notebooks_dir),
-        target_dir,
-        "--overwrite",
-    ]
+    env = {**os.environ, "DATABRICKS_HOST": host, "DATABRICKS_TOKEN": token}
+    cmd = ["databricks", "workspace", "import-dir", str(notebooks_dir), target_dir, "--overwrite"]
     print(f"  Commande : {' '.join(cmd)}")
 
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -201,77 +175,18 @@ def restore_notebooks(backup_path, host, token, target_dir="/Shared/dr-restore",
         return 0
 
 
-# ── Restore SQL Warehouses ────────────────────────────────────────────────────
-
-def restore_warehouses(host, token, warehouses_backup, dry_run=False):
-    """
-    Recrée les SQL Warehouses (anciennement endpoints SQL).
-    Seuls les warehouses non-managés par Databricks sont recréés.
-    """
-    print("\n=== RESTAURATION SQL WAREHOUSES ===")
-
-    # Récupérer les warehouses existants
-    try:
-        existing_wh = {
-            w["name"]: w["id"]
-            for w in api_get(host, token, "/api/2.0/sql/warehouses").get("warehouses", [])
-        }
-    except Exception as e:
-        print(f"  [WARN] Impossible de lister les warehouses existants : {e}")
-        existing_wh = {}
-
-    # Champs à exclure lors de la recréation
-    readonly_fields = {
-        "id", "state", "num_active_sessions", "creator_name",
-        "jdbc_url", "odbc_params", "health", "num_clusters",
-    }
-
-    ok = skip = err = 0
-    for wh in warehouses_backup:
-        name = wh.get("name", "unknown")
-
-        if name in existing_wh:
-            print(f"  ⏭ [SKIP] Warehouse déjà existant : {name}")
-            skip += 1
-            continue
-
-        if dry_run:
-            print(f"  [DRY-RUN] Créerait warehouse : {name} ({wh.get('cluster_size', '?')})")
-            ok += 1
-            continue
-
-        payload = {k: v for k, v in wh.items() if k not in readonly_fields and v is not None}
-
-        resp = api_post(host, token, "/api/2.0/sql/warehouses", payload)
-        if resp.ok:
-            new_id = resp.json().get("id")
-            print(f"  ✅ Warehouse créé : {name} (new_id={new_id})")
-            ok += 1
-        else:
-            try:
-                detail = resp.json().get("message", resp.text[:200])
-            except Exception:
-                detail = resp.text[:200]
-            print(f"  ❌ Erreur warehouse {name}: {detail}")
-            err += 1
-
-    print(f"\n  Résultat : {ok} créés | {skip} ignorés | {err} erreurs")
-    return err
-
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Restore Databricks Jobs, Notebooks and SQL Warehouses from DR backup"
+        description="Restore Databricks Jobs and Notebooks from DR backup"
     )
     parser.add_argument("--backup-path", required=True,
                         help="Chemin local vers le répertoire de backup (ex: ./backup/2026-04-05)")
     parser.add_argument("--host",  required=True, help="Databricks workspace URL")
     parser.add_argument("--token", required=True, help="Databricks PAT token")
-    parser.add_argument("--restore-jobs",       action="store_true", help="Restaurer les jobs")
-    parser.add_argument("--restore-notebooks",  action="store_true", help="Restaurer les notebooks")
-    parser.add_argument("--restore-warehouses", action="store_true", help="Restaurer les SQL warehouses")
+    parser.add_argument("--restore-jobs",      action="store_true", help="Restaurer les jobs")
+    parser.add_argument("--restore-notebooks", action="store_true", help="Restaurer les notebooks")
     parser.add_argument("--target-dir", default="/Shared/dr-restore",
                         help="Dossier destination dans le workspace pour les notebooks (défaut: /Shared/dr-restore)")
     parser.add_argument("--skip-dab-jobs", action="store_true", default=True,
@@ -285,9 +200,9 @@ def main():
     if args.dry_run:
         print("[DRY-RUN] Mode simulation — aucun changement ne sera appliqué\n")
 
-    if not any([args.restore_jobs, args.restore_notebooks, args.restore_warehouses]):
+    if not any([args.restore_jobs, args.restore_notebooks]):
         print("Aucune option de restauration spécifiée.")
-        print("Utilisez --restore-jobs, --restore-notebooks, et/ou --restore-warehouses")
+        print("Utilisez --restore-jobs et/ou --restore-notebooks")
         sys.exit(1)
 
     backup_path = Path(args.backup_path)
@@ -300,7 +215,7 @@ def main():
     total_errors = 0
 
     if args.restore_jobs:
-        jobs_path = backup_path / "workspace" / "jobs.json"
+        jobs_path = backup_path / "jobs" / "jobs_all.json"
         if jobs_path.exists():
             jobs_backup = json.loads(jobs_path.read_text(encoding="utf-8"))
             total_errors += restore_jobs(
@@ -308,7 +223,7 @@ def main():
                 dry_run=args.dry_run, skip_dab=args.skip_dab_jobs
             )
         else:
-            print(f"\n[SKIP] jobs.json introuvable : {jobs_path}")
+            print(f"\n[SKIP] jobs_all.json introuvable : {jobs_path}")
 
     if args.restore_notebooks:
         err = restore_notebooks(
@@ -316,16 +231,6 @@ def main():
             target_dir=args.target_dir, dry_run=args.dry_run
         )
         total_errors += err
-
-    if args.restore_warehouses:
-        wh_path = backup_path / "workspace" / "sql_warehouses.json"
-        if wh_path.exists():
-            wh_backup = json.loads(wh_path.read_text(encoding="utf-8"))
-            total_errors += restore_warehouses(
-                args.host, args.token, wh_backup, dry_run=args.dry_run
-            )
-        else:
-            print(f"\n[SKIP] sql_warehouses.json introuvable : {wh_path}")
 
     print(f"\n{'='*55}")
     if total_errors == 0:
