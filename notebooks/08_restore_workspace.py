@@ -65,7 +65,8 @@ print(f"[OK] backup_root    = {backup_root}")
 print(f"[OK] backup_date    = {backup_date}")
 print(f"[OK] restore_type   = {restore_type}")
 print(f"[OK] notebook_filter= {notebook_filter or '(tous)'}")
-print(f"[OK] target_path    = {target_workspace_path or '(chemin d'origine)'}")
+target_path_label = target_workspace_path or "(chemin d'origine)"
+print(f"[OK] target_path    = {target_path_label}")
 print(f"[OK] dry_run        = {dry_run}")
 
 # COMMAND ----------
