@@ -2,15 +2,18 @@
 # notebooks/06_retention.py
 
 # COMMAND ----------
-# MAGIC %md # 06 — Retention Policy (snapshots + nettoyage)
+# MAGIC %md # 06 — Retention Policy (snapshots + nettoyage + VACUUM)
 # MAGIC
 # MAGIC | Niveau    | Paramètre        | Mécanisme                                                           |
 # MAGIC |-----------|------------------|---------------------------------------------------------------------|
-# MAGIC | Quotidien | `retain_daily`   | Delta log retention sur `incremental/` (positionné dans 02)        |
-# MAGIC | Hebdo     | `retain_weekly`  | SHALLOW CLONE le lundi → `snapshots/weekly/YYYY-Www/`              |
+# MAGIC | Quotidien | `retain_daily`   | Delta log retention sur `incremental/` (positionné dans 02), 30j par défaut |
+# MAGIC | Hebdo     | *(désactivé)*    | Abandonné (Option C) — SHALLOW CLONE non supporté par UC sur tables non-MANAGED. `retain_weekly` ne sert plus qu'à purger les anciens snapshots existants. |
 # MAGIC | Mensuel   | `retain_monthly` | DEEP CLONE le 1er du mois → `snapshots/monthly/YYYY-MM/`           |
 # MAGIC
-# MAGIC `force_snapshot=true` crée les deux snapshots quel que soit le jour (tests, rattrapage).
+# MAGIC `force_snapshot=true` force le snapshot monthly quel que soit le jour (tests, rattrapage).
+# MAGIC
+# MAGIC Un step VACUUM (6.5) purge explicitement les fichiers au-delà de `deletedFileRetentionDuration`
+# MAGIC — sans lui, la propriété ne fait que fixer un seuil de sécurité, elle ne supprime rien seule.
 
 # COMMAND ----------
 import concurrent.futures
@@ -28,13 +31,14 @@ def _uc_head(path: str) -> str:
 # COMMAND ----------
 dbutils.widgets.text("backup_root",     "",            "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",     str(date.today()), "Date du backup courant YYYY-MM-DD")
-dbutils.widgets.text("retain_daily",    "15",          "Rétention quotidienne (jours) — info affichage")
-dbutils.widgets.text("retain_weekly",   "2",           "Rétention hebdomadaire (semaines)")
+dbutils.widgets.text("retain_daily",    "30",          "Rétention quotidienne (jours) — info affichage")
+dbutils.widgets.text("retain_weekly",   "2",           "Rétention hebdomadaire (semaines) — legacy, purge uniquement")
 dbutils.widgets.text("retain_monthly",  "1",           "Rétention mensuelle (mois)")
 dbutils.widgets.text("dry_run",         "false",       "Simulation (true = aucune écriture/suppression)")
 dbutils.widgets.text("max_parallel",    "4",           "Clones parallèles pour les snapshots")
 dbutils.widgets.text("force_snapshot",  "false",       "Forcer weekly+monthly quel que soit le jour (tests)")
 dbutils.widgets.text("enable_monthly",  "false",       "Activer snapshot mensuel — false dans le job daily, true dans dr-backup-monthly")
+dbutils.widgets.text("enable_weekly",   "false",       "Activer création snapshot weekly — désactivé (Option C, non supporté sur tables non-MANAGED UC)")
 
 backup_root     = dbutils.widgets.get("backup_root")
 backup_date     = dbutils.widgets.get("backup_date")
@@ -45,6 +49,7 @@ dry_run         = dbutils.widgets.get("dry_run").lower()         == "true"
 max_parallel    = max(1, int(dbutils.widgets.get("max_parallel")))
 force_snapshot  = dbutils.widgets.get("force_snapshot").lower()  == "true"
 enable_monthly  = dbutils.widgets.get("enable_monthly").lower()  == "true"
+enable_weekly   = dbutils.widgets.get("enable_weekly").lower()   == "true"
 
 today            = date.fromisoformat(backup_date)
 incremental_root = f"{backup_root}/incremental"
@@ -80,17 +85,21 @@ except Exception as e:
         print(f"[ERROR] Impossible de lister les tables: {e2}")
 
 # COMMAND ----------
-# MAGIC %md ## 6.2 — Snapshot hebdomadaire (SHALLOW CLONE)
+# MAGIC %md ## 6.2 — Snapshot hebdomadaire (DÉSACTIVÉ — Option C)
 # MAGIC
-# MAGIC Créé le lundi uniquement (ou si `force_snapshot=true`).
-# MAGIC Le SHALLOW CLONE copie uniquement le transaction log Delta — aucune donnée dupliquée.
-# MAGIC Les fichiers Parquet dans `incremental/` sont conservés via `deletedFileRetentionDuration`
-# MAGIC pendant `max(retain_daily, retain_weekly * 7) + 2` jours (positionné dans 02_data_clone).
+# MAGIC Abandonné : Unity Catalog interdit désormais le SHALLOW CLONE sur des tables qui ne sont
+# MAGIC pas UC MANAGED (`CANNOT_SHALLOW_CLONE_NON_UC_MANAGED_TABLE_AS_SOURCE_OR_TARGET`) — or toutes
+# MAGIC les tables de ce backup sont référencées par chemin brut, jamais enregistrées dans le catalog.
+# MAGIC La couverture de restauration est reportée sur `retain_daily`, désormais étendu (30 jours par
+# MAGIC défaut) — voir 6.4 pour la purge progressive des anciens snapshots weekly déjà existants.
+# MAGIC
+# MAGIC `enable_weekly=true` permettrait de réactiver la création (code conservé), mais nécessiterait
+# MAGIC d'abord d'enregistrer ces tables comme UC MANAGED (changement architectural, non fait ici).
 
 # COMMAND ----------
 iso_year, iso_week, iso_dow = today.isocalendar()
 week_label = f"{iso_year}-W{iso_week:02d}"
-do_weekly  = (iso_dow == 1) or force_snapshot
+do_weekly  = enable_weekly and ((iso_dow == 1) or force_snapshot)
 
 weekly_results = []
 
@@ -117,6 +126,8 @@ if do_weekly and incremental_tables:
     print(f"[OK] Weekly {week_label} : {w_ok}/{len(incremental_tables)} tables")
 elif do_weekly:
     print("[WARN] Snapshot weekly déclenché mais aucune table disponible")
+elif not enable_weekly:
+    print("[INFO] Snapshot weekly désactivé (Option C — enable_weekly=false)")
 else:
     print(f"[INFO] Snapshot weekly ignoré — dow={iso_dow} (pas lundi)")
 
@@ -221,7 +232,40 @@ for label in del_monthly:
             errors.append({"path": path, "error": str(e)})
 
 # COMMAND ----------
-# MAGIC %md ## 6.5 — Résumé
+# MAGIC %md ## 6.5 — VACUUM (purge des fichiers au-delà de la rétention configurée)
+# MAGIC
+# MAGIC Sans VACUUM explicite, les propriétés `delta.deletedFileRetentionDuration` définies dans
+# MAGIC `02_data_clone` ne font que fixer un **seuil de sécurité** — elles ne suppriment jamais rien
+# MAGIC d'elles-mêmes. `VACUUM` est appelé ici **sans `RETAIN` explicite**, pour toujours respecter
+# MAGIC le seuil déjà configuré sur chaque table (jamais une valeur plus courte que la fenêtre de
+# MAGIC restauration promise par `retain_daily`).
+
+# COMMAND ----------
+vacuum_results = []
+
+print(f"\n{'─'*60}")
+print(f"{'[DRY-RUN] ' if dry_run else ''}VACUUM — {len(incremental_tables)} table(s)")
+print(f"{'─'*60}")
+
+for src_path in incremental_tables:
+    if dry_run:
+        print(f"  [DRY-RUN] VACUUM delta.`{src_path}`")
+        vacuum_results.append({"table": src_path, "status": "dry_run"})
+        continue
+    try:
+        spark.sql(f"VACUUM delta.`{src_path}`")
+        print(f"  [OK] VACUUM {src_path}")
+        vacuum_results.append({"table": src_path, "status": "success"})
+    except Exception as e:
+        print(f"  [ERROR] VACUUM {src_path}: {e}")
+        vacuum_results.append({"table": src_path, "status": "error", "error": str(e)})
+
+vacuum_ok    = sum(1 for r in vacuum_results if r["status"] == "success")
+vacuum_error = sum(1 for r in vacuum_results if r["status"] == "error")
+print(f"\n[OK] VACUUM : {vacuum_ok} table(s) purgée(s), {vacuum_error} erreur(s)")
+
+# COMMAND ----------
+# MAGIC %md ## 6.6 — Résumé
 
 # COMMAND ----------
 w_ok = sum(1 for r in weekly_results  if r.get("status") == "success")
@@ -239,6 +283,8 @@ summary = {
     "deleted_count":     len(deleted),
     "error_count":       len(errors),
     "deleted_paths":     deleted,
+    "vacuum_ok":         vacuum_ok,
+    "vacuum_error":      vacuum_error,
 }
 
 prefix = "[DRY-RUN] " if dry_run else ""
@@ -247,10 +293,11 @@ print(f"""
 ║         RETENTION POLICY — RÉSUMÉ           ║
 ╠══════════════════════════════════════════════╣
 ║  daily    : {retain_daily}j  (Delta log sur incremental/)
-║  Weekly   : {(week_label  if do_weekly  else 'ignoré'):<12} ({w_ok} tables OK)
-║  Monthly  : {(month_label if do_monthly else 'ignoré'):<12} ({m_ok} tables OK)
+║  Weekly   : {(week_label  if do_weekly  else 'désactivé (Option C)'):<20} ({w_ok} tables OK)
+║  Monthly  : {(month_label if do_monthly else 'ignoré'):<20} ({m_ok} tables OK)
 ║  {prefix}Supprimés : {len(deleted):<4} dossiers
 ║  Erreurs  : {len(errors):<4}
+║  {prefix}VACUUM    : {vacuum_ok:<4} tables ({vacuum_error} erreurs)
 ╚══════════════════════════════════════════════╝
 """)
 

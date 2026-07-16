@@ -29,8 +29,8 @@ def _uc_put(path: str, content: str) -> None:
 dbutils.widgets.text("backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",    str(date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("lib_path",       "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
-dbutils.widgets.text("retain_daily",   "15",    "Rétention quotidienne (jours)")
-dbutils.widgets.text("retain_weekly",  "2",     "Rétention hebdomadaire (semaines)")
+dbutils.widgets.text("retain_daily",   "30",    "Rétention quotidienne (jours)")
+dbutils.widgets.text("retain_weekly",  "2",     "Rétention hebdomadaire (semaines) — legacy, purge uniquement")
 dbutils.widgets.text("retain_monthly", "1",     "Rétention mensuelle (mois)")
 dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simulation)")
 
@@ -43,6 +43,10 @@ retain_monthly = dbutils.widgets.get("retain_monthly")
 dry_run        = dbutils.widgets.get("dry_run")
 # Snapshot mensuel désactivé dans le job daily — géré par le job dr-backup-monthly
 ENABLE_MONTHLY = "false"
+# Snapshot weekly abandonné (Option C) — SHALLOW CLONE non supporté sur tables non-MANAGED UC.
+# retain_weekly n'est plus transmis qu'à 06_retention, pour purger les anciens snapshots weekly
+# déjà existants au fil du temps (aucun nouveau n'est créé).
+ENABLE_WEEKLY  = "false"
 
 steps = []
 global_status = "success"
@@ -89,7 +93,6 @@ clone_result = run_step("data_clone", "./02_data_clone", {
     **base_params,
     "uc_metadata_result": json.dumps(uc_result),
     "retain_daily":       retain_daily,
-    "retain_weekly":      retain_weekly,
 }, critical=True)
 
 # COMMAND ----------
@@ -172,6 +175,7 @@ run_step("retention", "./06_retention", {
     "retain_monthly": retain_monthly,
     "dry_run":        dry_run,
     "enable_monthly": ENABLE_MONTHLY,
+    "enable_weekly":  ENABLE_WEEKLY,
 }, critical=False)
 
 # COMMAND ----------

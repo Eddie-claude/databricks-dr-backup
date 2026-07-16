@@ -13,10 +13,10 @@ variables:
     description: "Email de notification en cas d'échec"
     default: "efi@keyit.ch"
   retain_daily:
-    description: "Rétention quotidienne : nombre de jours à conserver intégralement"
-    default: "15"
+    description: "Rétention quotidienne : nombre de jours de restauration point-in-time (Delta log). Étendu à 30j depuis l'abandon du snapshot weekly (Option C)."
+    default: "30"
   retain_weekly:
-    description: "Rétention hebdomadaire : nombre de semaines (1 backup/semaine)"
+    description: "Legacy — snapshot weekly abandonné (Option C, non supporté par UC sur tables non-MANAGED). Sert uniquement à purger les anciens snapshots déjà existants."
     default: "4"
   retain_monthly:
     description: "Rétention mensuelle : nombre de mois (1 backup/mois)"
@@ -35,7 +35,7 @@ resources:
     # ── Job 1 : Backup journalier (incrémental, ~30min-2h) ────────────────────
     dr_backup_daily:
       name: dr-backup-daily
-      description: "DR Backup journalier — UC metadata + Delta DEEP CLONE incrémental + diff + rapport + weekly snapshot"
+      description: "DR Backup journalier — UC metadata + Delta DEEP CLONE incrémental + diff + rapport + retention/VACUUM"
 
       tags:
         project: databricks-dr

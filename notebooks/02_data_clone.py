@@ -38,8 +38,7 @@ dbutils.widgets.text("backup_date",        str(__import__('datetime').date.today
 dbutils.widgets.text("uc_metadata_result", "{}",             "JSON result from 01_uc_metadata")
 dbutils.widgets.text("resume",             "true",           "Reprendre depuis checkpoint (true/false)")
 dbutils.widgets.text("max_parallel",       "4",              "Clones simultanés (1 = séquentiel)")
-dbutils.widgets.text("retain_daily",       "15",             "Rétention quotidienne (jours) — Delta log")
-dbutils.widgets.text("retain_weekly",      "2",              "Rétention hebdomadaire (semaines) — VACUUM")
+dbutils.widgets.text("retain_daily",       "30",             "Rétention quotidienne (jours) — Delta log")
 
 backup_root        = dbutils.widgets.get("backup_root")
 backup_date        = dbutils.widgets.get("backup_date")
@@ -47,9 +46,10 @@ uc_result          = json.loads(dbutils.widgets.get("uc_metadata_result"))
 resume_mode        = dbutils.widgets.get("resume").lower() == "true"
 max_parallel       = max(1, int(dbutils.widgets.get("max_parallel")))
 retain_daily       = max(1, int(dbutils.widgets.get("retain_daily")))
-retain_weekly      = max(1, int(dbutils.widgets.get("retain_weekly")))
-# Fichiers supprimés conservés assez longtemps pour que les SHALLOW CLONEs weekly restent valides
-max_file_retention = max(retain_daily, retain_weekly * 7) + 2
+# Fichiers supprimés conservés assez longtemps pour couvrir la fenêtre de restauration point-in-time.
+# Plus de terme "weekly" : le snapshot weekly (SHALLOW CLONE) est abandonné — il n'est de toute
+# façon plus supporté par Unity Catalog sur des tables non-MANAGED (CANNOT_SHALLOW_CLONE_...).
+max_file_retention = retain_daily + 2
 
 # Schémas UC système : vues uniquement, non cloneables par DEEP CLONE
 _EXCLUDED_SCHEMAS = {"information_schema"}
