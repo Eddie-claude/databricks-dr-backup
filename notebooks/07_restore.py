@@ -199,6 +199,11 @@ results = []
 ok_count    = 0
 error_count = 0
 
+# CREATE OR REPLACE TABLE ... DEEP CLONE ne crée pas le schéma parent s'il
+# n'existe pas — nécessaire quand target_catalog pointe vers un catalog neuf
+# (ex: restauration vers un catalog temporaire de vérification avant prod).
+ensured_schemas = set()
+
 prefix = "[DRY-RUN] " if dry_run else ""
 
 print(f"\n{'─'*60}")
@@ -210,6 +215,14 @@ for t in tables_to_restore:
     tgt_cat = target_catalog if target_catalog else t["catalog"]
     tgt_sch = target_schema  if target_schema  else t["schema"]
     label   = f"{tgt_cat}.{tgt_sch}.{t['table']}"
+
+    schema_key = (tgt_cat, tgt_sch)
+    if schema_key not in ensured_schemas:
+        ensured_schemas.add(schema_key)
+        if dry_run:
+            print(f"── CREATE SCHEMA IF NOT EXISTS `{tgt_cat}`.`{tgt_sch}`")
+        else:
+            spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{tgt_cat}`.`{tgt_sch}`")
 
     print(f"{'── ' if dry_run else '▶  '}{label}")
     print(f"   {sql}\n")
