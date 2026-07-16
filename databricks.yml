@@ -113,6 +113,39 @@ resources:
             on_failure:
               - ${var.notification_email}
 
+    # ── Job 3 : Game Day DR — test de restauration automatisé (à la demande) ──
+    dr_gameday:
+      name: dr-gameday
+      description: "DR Game Day — test de restauration automatisé et non-interactif sur le catalog de démo (source_demo01), sans intervention manuelle. Déclenchement à la demande uniquement (pas de schedule)."
+
+      tags:
+        project: databricks-dr
+        managed_by: dab
+
+      max_concurrent_runs: 1
+
+      tasks:
+        - task_key: gameday
+          new_cluster:
+            spark_version: "17.3.x-scala2.13"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            data_security_mode: "SINGLE_USER"
+            spark_conf:
+              spark.master: "local[*, 8]"
+              spark.databricks.cluster.profile: "singleNode"
+            custom_tags:
+              ResourceClass: "SingleNode"
+          timeout_seconds: 3600   # 1h — largement suffisant pour un jeu de données de démo (~20 lignes)
+          notebook_task:
+            notebook_path: ./notebooks/demo/07_gameday.py
+            base_parameters:
+              backup_root: ${var.backup_root}
+              lib_path:    ${var.lib_path}
+          email_notifications:
+            on_failure:
+              - ${var.notification_email}
+
 # ── Targets ───────────────────────────────────────────────────────────────────
 targets:
 
