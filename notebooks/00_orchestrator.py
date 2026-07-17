@@ -114,10 +114,15 @@ _uc_put(manifest_path, json.dumps(current_manifest, indent=2))
 print(f"[OK] Manifest écrit : {manifest_path}")
 
 # COMMAND ----------
-# DBTITLE 1, Compléter le manifest avec les assets workspace (exportés par CI/CD)
+# DBTITLE 1, Compléter le manifest avec les assets workspace (exportés par 05_workspace_config)
 
-workspace_jobs_path = f"{backup_root}/{backup_date}/workspace/jobs.json"
-workspace_notebooks_manifest = f"{backup_root}/{backup_date}/workspace/notebooks"
+# Ces chemins sont produits par 05_workspace_config.py, qui tourne juste avant (étape 3,
+# ci-dessus) — entièrement à l'intérieur de Databricks via ce même orchestrateur. Ne pas les
+# confondre avec scripts/export_workspace.py (workflow GitHub Actions dr_backup.yml), qui écrit
+# à un chemin différent (backup/{date}/workspace/...) et ne tourne que sur l'infra CI/CD interne
+# KeyIT — jamais chez un client qui déploie uniquement via Databricks Asset Bundles.
+workspace_jobs_path          = f"{backup_root}/{backup_date}/jobs/jobs_all.json"
+workspace_notebooks_manifest = f"{backup_root}/{backup_date}/notebooks"
 
 try:
     jobs_raw = json.loads(dbutils.fs.head(workspace_jobs_path, 1_000_000))
@@ -127,8 +132,22 @@ try:
 except Exception as e:
     print(f"[WARN] Impossible de charger jobs.json: {e}")
 
+def _list_notebooks_recursive(path):
+    """05_workspace_config préserve l'arborescence workspace d'origine (ex: Shared/dr-backup/...)
+    — dbutils.fs.ls seul ne listerait que le premier niveau de dossiers, pas les fichiers imbriqués."""
+    files = []
+    try:
+        for item in dbutils.fs.ls(path):
+            if item.name.endswith("/"):
+                files.extend(_list_notebooks_recursive(item.path.rstrip("/")))
+            else:
+                files.append(item.path)
+    except Exception:
+        pass
+    return files
+
 try:
-    nb_files = [f.path for f in dbutils.fs.ls(workspace_notebooks_manifest)]
+    nb_files = _list_notebooks_recursive(workspace_notebooks_manifest)
     current_manifest["notebooks"] = nb_files
     print(f"[OK] {len(nb_files)} notebooks listés dans le manifest")
 except Exception as e:
