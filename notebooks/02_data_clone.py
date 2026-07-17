@@ -129,7 +129,8 @@ _last_versions_lock = threading.Lock()
 def load_last_versions() -> dict:
     try:
         return json.loads(_uc_head(last_versions_path))
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] load_last_versions({last_versions_path}) a échoué : {e}")
         return {}
 
 def save_last_versions(versions: dict) -> None:
