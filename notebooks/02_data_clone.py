@@ -30,6 +30,14 @@ def _uc_put(path: str, content: str) -> None:
     dbutils.fs.rm(tmp, recurse=True)
 
 def _uc_head(path: str) -> str:
+    # Spark met en cache le file listing d'un chemin au sein d'une session — sur un cluster
+    # resté chaud entre plusieurs runs, une lecture antérieure du même chemin (ex: vide/absent
+    # à ce moment-là) peut rester en cache même après une réécriture complète du fichier.
+    # refreshByPath force Spark à ré-interroger le filesystem au lieu de servir le cache.
+    try:
+        spark.catalog.refreshByPath(path)
+    except Exception:
+        pass
     return "\n".join(r.value for r in spark.read.text(path).collect())
 
 # COMMAND ----------
@@ -174,9 +182,6 @@ def clone_one(args: tuple) -> dict:
     # diffère ne serait-ce que d'une unité, le clone se fait normalement ci-dessous.
     source_version = get_source_version(catalog, schema, table)
     last_version   = last_versions.get(fqn)
-    print(f"  [DEBUG] {fqn}: source_version={source_version!r} ({type(source_version).__name__}), "
-          f"last_version={last_version!r} ({type(last_version).__name__}), "
-          f"égaux={source_version == last_version if source_version is not None and last_version is not None else 'N/A'}")
 
     if source_version is not None and last_version is not None and source_version == last_version:
         elapsed = time.time() - t0
@@ -271,13 +276,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor
     new_results = list(executor.map(clone_one, args_list))
 
 flush_checkpoint(already_done)  # garantit l'écriture finale
-print(f"[DEBUG] new_last_versions avant écriture : {len(new_last_versions)} entrée(s)")
 save_last_versions(new_last_versions)
-try:
-    _reread = json.loads(_uc_head(last_versions_path))
-    print(f"[DEBUG] Relecture immédiate après écriture : {len(_reread)} entrée(s)")
-except Exception as _e:
-    print(f"[DEBUG] Relecture immédiate a échoué : {_e}")
 
 # Résultats complets (checkpoint précédent + nouveau run)
 clone_results = list(already_done.values())

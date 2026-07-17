@@ -27,6 +27,13 @@ spark = SparkSession.builder.getOrCreate()
 
 def _uc_head(path: str) -> str:
     """Lit un fichier texte depuis ADLS (UC-aware)."""
+    # Invalide le cache de listing Spark pour ce chemin — sans ça, sur un cluster resté chaud,
+    # une lecture antérieure (fichier vide/absent à ce moment-là) peut rester en cache même
+    # après une réécriture complète du fichier.
+    try:
+        spark.catalog.refreshByPath(path)
+    except Exception:
+        pass
     return "\n".join(r.value for r in spark.read.text(path).collect())
 
 # COMMAND ----------
