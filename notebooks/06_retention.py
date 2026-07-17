@@ -19,7 +19,7 @@
 import concurrent.futures
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from pyspark.sql import SparkSession
 
@@ -172,7 +172,7 @@ else:
     print(f"[INFO] Snapshot mensuel ignoré — jour={today.day} (pas le 1er)")
 
 # COMMAND ----------
-# MAGIC %md ## 6.4 — Nettoyage snapshots expirés
+# MAGIC %md ## 6.4 — Nettoyage snapshots expirés + dossiers datés
 
 # COMMAND ----------
 WEEK_PATTERN  = re.compile(r"^\d{4}-W\d{2}$")
@@ -221,6 +221,34 @@ for label in del_monthly:
     path = f"{monthly_root}/{label}"
     if dry_run:
         print(f"  [DRY-RUN] monthly à supprimer : {label}")
+        deleted.append(path)
+    else:
+        try:
+            dbutils.fs.rm(path, recurse=True)
+            print(f"  [DEL] {label}")
+            deleted.append(path)
+        except Exception as e:
+            print(f"  [ERROR] {label}: {e}")
+            errors.append({"path": path, "error": str(e)})
+
+# ── Daily : dossiers datés backup/{YYYY-MM-DD}/ (uc_metadata, manifest, notebooks, jobs...) ──
+# Alignés sur retain_daily pour rester cohérents avec la fenêtre de restauration promise —
+# au-delà, ces artefacts ne correspondent plus à un point de restauration réellement utilisable.
+# backup/latest.json (pas un dossier daté) et le dossier de la date courante sont toujours exclus.
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+daily_cutoff = today - timedelta(days=retain_daily)
+
+all_daily = list_snapshot_folders(backup_root, DATE_PATTERN)
+del_daily = [
+    d for d in all_daily
+    if d != backup_date and date.fromisoformat(d) < daily_cutoff
+]
+
+print(f"\n[Daily] {len(all_daily)} dossier(s) daté(s) trouvé(s) — seuil {retain_daily}j (avant {daily_cutoff.isoformat()}) — supprimer {len(del_daily)}")
+for label in del_daily:
+    path = f"{backup_root}/{label}"
+    if dry_run:
+        print(f"  [DRY-RUN] dossier daté à supprimer : {label}")
         deleted.append(path)
     else:
         try:
