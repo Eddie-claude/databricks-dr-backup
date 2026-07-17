@@ -33,6 +33,7 @@ dbutils.widgets.text("retain_daily",   "30",    "Rétention quotidienne (jours)"
 dbutils.widgets.text("retain_weekly",  "2",     "Rétention hebdomadaire (semaines) — legacy, purge uniquement")
 dbutils.widgets.text("retain_monthly", "1",     "Rétention mensuelle (mois)")
 dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simulation)")
+dbutils.widgets.text("max_parallel",   "8",     "Clones simultanés dans 02_data_clone — aligné sur spark.master local[*, 8]")
 
 backup_root    = dbutils.widgets.get("backup_root")
 backup_date    = dbutils.widgets.get("backup_date")
@@ -41,6 +42,7 @@ retain_daily   = dbutils.widgets.get("retain_daily")
 retain_weekly  = dbutils.widgets.get("retain_weekly")
 retain_monthly = dbutils.widgets.get("retain_monthly")
 dry_run        = dbutils.widgets.get("dry_run")
+max_parallel   = dbutils.widgets.get("max_parallel")
 # Snapshot mensuel désactivé dans le job daily — géré par le job dr-backup-monthly
 ENABLE_MONTHLY = "false"
 # Snapshot weekly abandonné (Option C) — SHALLOW CLONE non supporté sur tables non-MANAGED UC.
@@ -93,6 +95,7 @@ clone_result = run_step("data_clone", "./02_data_clone", {
     **base_params,
     "uc_metadata_result": json.dumps(uc_result),
     "retain_daily":       retain_daily,
+    "max_parallel":       max_parallel,
 }, critical=True)
 
 # COMMAND ----------

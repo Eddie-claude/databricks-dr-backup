@@ -37,7 +37,7 @@ dbutils.widgets.text("backup_root",        "",               "Backup root (abfss
 dbutils.widgets.text("backup_date",        str(__import__('datetime').date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("uc_metadata_result", "{}",             "JSON result from 01_uc_metadata")
 dbutils.widgets.text("resume",             "true",           "Reprendre depuis checkpoint (true/false)")
-dbutils.widgets.text("max_parallel",       "4",              "Clones simultanés (1 = séquentiel)")
+dbutils.widgets.text("max_parallel",       "8",              "Clones simultanés (1 = séquentiel) — aligné sur spark.master local[*, 8]")
 dbutils.widgets.text("retain_daily",       "30",             "Rétention quotidienne (jours) — Delta log")
 
 backup_root        = dbutils.widgets.get("backup_root")
@@ -83,6 +83,10 @@ if not table_names:
 data_backup_root    = f"{backup_root}/incremental"
 clone_manifest_path = f"{backup_root}/incremental/_manifests/{backup_date}.json"
 checkpoint_path     = f"{backup_root}/incremental/_checkpoints/{backup_date}.json"
+# Fichier persistant (pas daté) qui retient la dernière version Delta source clonée avec succès
+# pour chaque table — permet de sauter le DEEP CLONE (coûteux même sans changement, puisqu'il doit
+# quand même énumérer les fichiers source/dest pour le constater) quand rien n'a changé depuis hier.
+last_versions_path = f"{backup_root}/incremental/_last_versions.json"
 
 print(f"[INFO] max_parallel={max_parallel} | tables={len(table_names)} | resume={resume_mode}")
 
@@ -118,6 +122,34 @@ if resume_mode:
         print(f"[RESUME] {len(already_done)} tables déjà clonées trouvées dans le checkpoint")
 
 # COMMAND ----------
+# DBTITLE 1, Versions Delta connues (skip si source inchangée depuis le dernier clone réussi)
+
+_last_versions_lock = threading.Lock()
+
+def load_last_versions() -> dict:
+    try:
+        return json.loads(_uc_head(last_versions_path))
+    except Exception:
+        return {}
+
+def save_last_versions(versions: dict) -> None:
+    with _last_versions_lock:
+        _uc_put(last_versions_path, json.dumps(versions, indent=2))
+
+def get_source_version(catalog: str, schema: str, table: str):
+    """Dernière version Delta commitée sur la table source, ou None si indisponible
+    (vue, table non-Delta, etc.) — dans ce cas le clone se fait normalement, sans skip."""
+    try:
+        row = spark.sql(f"DESCRIBE HISTORY `{catalog}`.`{schema}`.`{table}` LIMIT 1").collect()[0]
+        return row["version"]
+    except Exception:
+        return None
+
+last_versions     = load_last_versions()
+new_last_versions = dict(last_versions)
+print(f"[INFO] {len(last_versions)} version(s) source connue(s) depuis le dernier run")
+
+# COMMAND ----------
 # DBTITLE 1, DEEP CLONE (parallèle)
 
 pending_tables = [t for t in table_names if t not in already_done]
@@ -131,8 +163,36 @@ def clone_one(args: tuple) -> dict:
     catalog, schema, table = fqn.split(".")
     dest = f"{data_backup_root}/{catalog}/{schema}/{table}"
     ts   = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    print(f"[{ts}] ({idx}/{pending_total}) → {fqn}")
     t0   = time.time()
+
+    # Si la version Delta de la source n'a pas bougé depuis le dernier clone réussi,
+    # rien n'a changé (versions Delta strictement monotones et exhaustives) — on saute
+    # le DEEP CLONE, qui coûte cher même sans changement (il doit énumérer les fichiers
+    # source/dest pour le constater). Aucun risque de rater un changement : si la version
+    # diffère ne serait-ce que d'une unité, le clone se fait normalement ci-dessous.
+    source_version = get_source_version(catalog, schema, table)
+    last_version   = last_versions.get(fqn)
+
+    if source_version is not None and last_version is not None and source_version == last_version:
+        elapsed = time.time() - t0
+        entry = {
+            "table":             fqn,
+            "status":            "success",
+            "size_gb":           0,
+            "num_files":         0,
+            "duration_s":        round(elapsed, 1),
+            "incremental":       True,
+            "skipped_unchanged": True,
+            "source_version":    source_version,
+        }
+        print(f"[{ts}] ({idx}/{pending_total}) → {fqn} — [SKIP] version Delta inchangée ({source_version})")
+        already_done[fqn] = entry
+        save_checkpoint(already_done)
+        with _last_versions_lock:
+            new_last_versions[fqn] = source_version
+        return entry
+
+    print(f"[{ts}] ({idx}/{pending_total}) → {fqn}")
 
     try:
         result  = spark.sql(
@@ -153,6 +213,7 @@ def clone_one(args: tuple) -> dict:
             "num_files":    num_files,
             "duration_s":   round(elapsed, 1),
             "incremental":  num_files == 0,
+            "source_version": source_version,
         }
         suffix = " (aucun changement)" if num_files == 0 else f" — {size_gb:.2f} GB ({num_files} fichiers)"
         print(f"  ✓ {fqn}{suffix} en {elapsed:.0f}s")
@@ -165,6 +226,10 @@ def clone_one(args: tuple) -> dict:
             """)
         except Exception as _e:
             print(f"  [WARN] Propriétés Delta non définies sur {dest}: {_e}")
+
+        if source_version is not None:
+            with _last_versions_lock:
+                new_last_versions[fqn] = source_version
 
     except Exception as e:
         elapsed = time.time() - t0
@@ -197,6 +262,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor
     new_results = list(executor.map(clone_one, args_list))
 
 flush_checkpoint(already_done)  # garantit l'écriture finale
+save_last_versions(new_last_versions)
 
 # Résultats complets (checkpoint précédent + nouveau run)
 clone_results = list(already_done.values())
@@ -207,18 +273,20 @@ total_size_gb = sum(r.get("size_gb", 0) for r in clone_results)
 
 _uc_put(clone_manifest_path, json.dumps(clone_results, indent=2))
 
-success_count = len([r for r in clone_results if r["status"] == "success"])
-skip_count    = len([r for r in clone_results if r["status"] == "skipped"])
-error_count   = len([r for r in clone_results if r["status"] == "error"])
+success_count  = len([r for r in clone_results if r["status"] == "success"])
+skip_count     = len([r for r in clone_results if r["status"] == "skipped"])
+error_count    = len([r for r in clone_results if r["status"] == "error"])
+version_skip_count = len([r for r in clone_results if r.get("skipped_unchanged")])
 
 print(f"""
 ╔══════════════════════════════════════════╗
 ║         DATA CLONE — RÉSUMÉ             ║
 ╠══════════════════════════════════════════╣
-║  Succès   : {success_count:<29} ║
-║  Ignorées : {skip_count:<29} ║
-║  Erreurs  : {error_count:<29} ║
-║  Volume   : {total_size_gb:<25.2f} GB ║
+║  Succès          : {success_count:<21} ║
+║    dont sans DEEP CLONE (version inchangée) : {version_skip_count:<3} ║
+║  Ignorées (vues) : {skip_count:<21} ║
+║  Erreurs         : {error_count:<21} ║
+║  Volume          : {total_size_gb:<17.2f} GB ║
 ╚══════════════════════════════════════════╝
 """)
 
@@ -230,9 +298,10 @@ if error_count > 0:
 
 # COMMAND ----------
 dbutils.notebook.exit(json.dumps({
-    "clone_results":  clone_results,
-    "total_size_gb":  round(total_size_gb, 3),
-    "success_count":  success_count,
-    "skip_count":     skip_count,
-    "error_count":    error_count,
+    "clone_results":      clone_results,
+    "total_size_gb":      round(total_size_gb, 3),
+    "success_count":      success_count,
+    "skip_count":         skip_count,
+    "error_count":        error_count,
+    "version_skip_count": version_skip_count,
 }))
