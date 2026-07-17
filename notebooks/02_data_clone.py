@@ -219,9 +219,13 @@ def clone_one(args: tuple) -> dict:
         suffix = " (aucun changement)" if num_files == 0 else f" — {size_gb:.2f} GB ({num_files} fichiers)"
         print(f"  ✓ {fqn}{suffix} en {elapsed:.0f}s")
         try:
+            # Delta exige logRetentionDuration >= deletedFileRetentionDuration (le log des
+            # transactions doit couvrir au moins la même fenêtre que les fichiers eux-mêmes) —
+            # sinon ALTER TABLE échoue avec UNSUPPORTED_TABLE_CHANGE. log_retention doit donc
+            # être >= max_file_retention, jamais l'inverse.
             spark.sql(f"""
               ALTER TABLE delta.`{dest}` SET TBLPROPERTIES (
-                'delta.logRetentionDuration'         = 'interval {retain_daily + 1} days',
+                'delta.logRetentionDuration'         = 'interval {max_file_retention + 1} days',
                 'delta.deletedFileRetentionDuration' = 'interval {max_file_retention} days'
               )
             """)
