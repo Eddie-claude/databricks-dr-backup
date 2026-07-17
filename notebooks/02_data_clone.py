@@ -30,15 +30,11 @@ def _uc_put(path: str, content: str) -> None:
     dbutils.fs.rm(tmp, recurse=True)
 
 def _uc_head(path: str) -> str:
-    # Spark met en cache le file listing d'un chemin au sein d'une session — sur un cluster
-    # resté chaud entre plusieurs runs, une lecture antérieure du même chemin (ex: vide/absent
-    # à ce moment-là) peut rester en cache même après une réécriture complète du fichier.
-    # refreshByPath force Spark à ré-interroger le filesystem au lieu de servir le cache.
-    try:
-        spark.catalog.refreshByPath(path)
-    except Exception:
-        pass
-    return "\n".join(r.value for r in spark.read.text(path).collect())
+    # spark.read.text(path) a montré un cache de listing par chemin qui survit à une réécriture
+    # complète du fichier dans la même session (même après spark.catalog.refreshByPath) — utilise
+    # dbutils.fs.head à la place (déjà utilisé avec succès ailleurs dans ce projet, ex:
+    # 00_orchestrator.py, sans ce problème de cache).
+    return dbutils.fs.head(path, 10_000_000)
 
 # COMMAND ----------
 dbutils.widgets.text("backup_root",        "",               "Backup root (abfss://...)")
