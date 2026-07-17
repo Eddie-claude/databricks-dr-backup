@@ -247,6 +247,21 @@ print(f"\n{'─'*60}")
 print(f"{'[DRY-RUN] ' if dry_run else ''}VACUUM — {len(incremental_tables)} table(s)")
 print(f"{'─'*60}")
 
+def get_vacuum_metrics(path: str) -> dict:
+    """Lit operationMetrics du dernier commit (l'opération VACUUM qu'on vient de lancer)
+    pour savoir combien de fichiers/dossiers ont réellement été supprimés — sans ça,
+    un VACUUM qui n'a rien trouvé à purger a exactement la même sortie qu'un VACUUM
+    qui a nettoyé des centaines de fichiers."""
+    try:
+        row     = spark.sql(f"DESCRIBE HISTORY delta.`{path}` LIMIT 1").collect()[0]
+        metrics = row["operationMetrics"] or {}
+        return {
+            "num_deleted_files":       int(metrics.get("numDeletedFiles", 0)),
+            "num_vacuumed_directories": int(metrics.get("numVacuumedDirectories", 0)),
+        }
+    except Exception:
+        return {"num_deleted_files": None, "num_vacuumed_directories": None}
+
 for src_path in incremental_tables:
     if dry_run:
         print(f"  [DRY-RUN] VACUUM delta.`{src_path}`")
@@ -254,15 +269,37 @@ for src_path in incremental_tables:
         continue
     try:
         spark.sql(f"VACUUM delta.`{src_path}`")
-        print(f"  [OK] VACUUM {src_path}")
-        vacuum_results.append({"table": src_path, "status": "success"})
+        vmetrics    = get_vacuum_metrics(src_path)
+        num_deleted = vmetrics["num_deleted_files"]
+        num_dirs    = vmetrics["num_vacuumed_directories"]
+
+        if num_deleted is None:
+            print(f"  [OK] VACUUM {src_path} (métriques indisponibles)")
+        elif num_deleted == 0:
+            print(f"  [OK] VACUUM {src_path} — rien à purger (dans la fenêtre de rétention)")
+        else:
+            print(f"  [OK] VACUUM {src_path} — {num_deleted} fichier(s) supprimé(s), {num_dirs} dossier(s)")
+
+        vacuum_results.append({
+            "table":  src_path,
+            "status": "success",
+            **vmetrics,
+        })
     except Exception as e:
         print(f"  [ERROR] VACUUM {src_path}: {e}")
         vacuum_results.append({"table": src_path, "status": "error", "error": str(e)})
 
-vacuum_ok    = sum(1 for r in vacuum_results if r["status"] == "success")
-vacuum_error = sum(1 for r in vacuum_results if r["status"] == "error")
-print(f"\n[OK] VACUUM : {vacuum_ok} table(s) purgée(s), {vacuum_error} erreur(s)")
+vacuum_ok           = sum(1 for r in vacuum_results if r["status"] == "success")
+vacuum_error        = sum(1 for r in vacuum_results if r["status"] == "error")
+vacuum_files_deleted = sum(r.get("num_deleted_files") or 0 for r in vacuum_results if r["status"] == "success")
+vacuum_dirs_deleted  = sum(r.get("num_vacuumed_directories") or 0 for r in vacuum_results if r["status"] == "success")
+vacuum_tables_cleaned = sum(1 for r in vacuum_results if r["status"] == "success" and (r.get("num_deleted_files") or 0) > 0)
+
+print(f"""
+[OK] VACUUM : {vacuum_ok} table(s) traitée(s), {vacuum_error} erreur(s)
+     {vacuum_tables_cleaned} table(s) avec des fichiers réellement supprimés
+     {vacuum_files_deleted} fichier(s) supprimé(s) au total, {vacuum_dirs_deleted} dossier(s) vidé(s)
+""")
 
 # COMMAND ----------
 # MAGIC %md ## 6.6 — Résumé
@@ -283,8 +320,12 @@ summary = {
     "deleted_count":     len(deleted),
     "error_count":       len(errors),
     "deleted_paths":     deleted,
-    "vacuum_ok":         vacuum_ok,
-    "vacuum_error":      vacuum_error,
+    "vacuum_ok":               vacuum_ok,
+    "vacuum_error":            vacuum_error,
+    "vacuum_tables_cleaned":   vacuum_tables_cleaned,
+    "vacuum_files_deleted":    vacuum_files_deleted,
+    "vacuum_dirs_deleted":     vacuum_dirs_deleted,
+    "vacuum_results":          vacuum_results,
 }
 
 prefix = "[DRY-RUN] " if dry_run else ""
@@ -297,7 +338,8 @@ print(f"""
 ║  Monthly  : {(month_label if do_monthly else 'ignoré'):<20} ({m_ok} tables OK)
 ║  {prefix}Supprimés : {len(deleted):<4} dossiers
 ║  Erreurs  : {len(errors):<4}
-║  {prefix}VACUUM    : {vacuum_ok:<4} tables ({vacuum_error} erreurs)
+║  {prefix}VACUUM    : {vacuum_ok:<4} tables traitées, {vacuum_error} erreurs
+║             {vacuum_tables_cleaned:<4} tables nettoyées ({vacuum_files_deleted} fichiers, {vacuum_dirs_deleted} dossiers)
 ╚══════════════════════════════════════════════╝
 """)
 
