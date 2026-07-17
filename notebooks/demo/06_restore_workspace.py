@@ -56,15 +56,11 @@ print(f"[OK] Périmètre       : {restore_scope}")
 
 # COMMAND ----------
 def _uc_head(path: str) -> str:
-    """Lit un fichier texte depuis ADLS (UC-aware, via Spark)."""
-    # Invalide le cache de listing Spark pour ce chemin — sans ça, sur un cluster resté chaud,
-    # une lecture antérieure (fichier vide/absent à ce moment-là) peut rester en cache même
-    # après une réécriture complète du fichier.
-    try:
-        spark.catalog.refreshByPath(path)
-    except Exception:
-        pass
-    return "\n".join(r.value for r in spark.read.text(path).collect())
+    """Lit un fichier texte depuis ADLS (UC-aware)."""
+    # spark.read.text(path) peut lire 0 octet sur ce chemin même juste après une réécriture
+    # complète dans la même session (observé en prod, confirmé via le panneau performance —
+    # "Bytes read: 0 B") — dbutils.fs.head est plus fiable ici.
+    return dbutils.fs.head(path, 10_000_000)
 
 
 def list_all_jobs():
