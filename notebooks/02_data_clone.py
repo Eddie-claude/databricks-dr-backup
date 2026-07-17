@@ -173,6 +173,9 @@ def clone_one(args: tuple) -> dict:
     # diffère ne serait-ce que d'une unité, le clone se fait normalement ci-dessous.
     source_version = get_source_version(catalog, schema, table)
     last_version   = last_versions.get(fqn)
+    print(f"  [DEBUG] {fqn}: source_version={source_version!r} ({type(source_version).__name__}), "
+          f"last_version={last_version!r} ({type(last_version).__name__}), "
+          f"égaux={source_version == last_version if source_version is not None and last_version is not None else 'N/A'}")
 
     if source_version is not None and last_version is not None and source_version == last_version:
         elapsed = time.time() - t0
