@@ -271,7 +271,13 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor
     new_results = list(executor.map(clone_one, args_list))
 
 flush_checkpoint(already_done)  # garantit l'écriture finale
+print(f"[DEBUG] new_last_versions avant écriture : {len(new_last_versions)} entrée(s)")
 save_last_versions(new_last_versions)
+try:
+    _reread = json.loads(_uc_head(last_versions_path))
+    print(f"[DEBUG] Relecture immédiate après écriture : {len(_reread)} entrée(s)")
+except Exception as _e:
+    print(f"[DEBUG] Relecture immédiate a échoué : {_e}")
 
 # Résultats complets (checkpoint précédent + nouveau run)
 clone_results = list(already_done.values())
