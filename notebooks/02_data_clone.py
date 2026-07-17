@@ -142,7 +142,8 @@ def get_source_version(catalog: str, schema: str, table: str):
     try:
         row = spark.sql(f"DESCRIBE HISTORY `{catalog}`.`{schema}`.`{table}` LIMIT 1").collect()[0]
         return row["version"]
-    except Exception:
+    except Exception as e:
+        print(f"  [WARN] get_source_version({catalog}.{schema}.{table}) a échoué : {e}")
         return None
 
 last_versions     = load_last_versions()
