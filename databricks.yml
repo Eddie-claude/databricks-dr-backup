@@ -51,15 +51,17 @@ resources:
       tasks:
         - task_key: orchestrator
           new_cluster:
+            # Multi-worker : le Single Node était le goulot d'étranglement du premier backup
+            # complet (~17s/table mesuré en prod contre ~1,3s/table sur cette configuration,
+            # soit un dépassement du timeout 8h à ~4800 tables). Le DEEP CLONE se parallélise
+            # sur les exécuteurs Spark, pas sur les threads du driver.
+            # Un retour à num_workers: 0 exige de rétablir spark.master local[*, N],
+            # spark.databricks.cluster.profile: singleNode et custom_tags ResourceClass,
+            # sinon le cluster ne démarre pas.
             spark_version: "17.3.x-scala2.13"
-            node_type_id: "Standard_DS3_v2"
-            num_workers: 0
+            node_type_id: "Standard_DS4_v2"
+            num_workers: 4
             data_security_mode: "SINGLE_USER"
-            spark_conf:
-              spark.master: "local[*, 8]"
-              spark.databricks.cluster.profile: "singleNode"
-            custom_tags:
-              ResourceClass: "SingleNode"
           timeout_seconds: 28800   # 8h — suffisant pour backup incrémental
           notebook_task:
             notebook_path: ./notebooks/00_orchestrator.py

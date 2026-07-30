@@ -20,6 +20,12 @@ __pycache__/
 # Claude Code (contient des tokens — ne jamais committer)
 .claude/
 
+# Éditeur
+.vscode/
+
+# Fichiers de verrouillage Word (créés à l'ouverture d'un .docx)
+~$*
+
 # Divers
 .env
 *.log
