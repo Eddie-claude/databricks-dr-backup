@@ -36,7 +36,10 @@ dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simul
 dbutils.widgets.text("max_parallel",   "8",     "Clones simultanés dans 02_data_clone — aligné sur spark.master local[*, 8]")
 
 backup_root    = dbutils.widgets.get("backup_root")
-backup_date    = dbutils.widgets.get("backup_date")
+# Vide = aujourd'hui. Renseigner explicitement la date d'un run interrompu permet de
+# retrouver son checkpoint (_checkpoints/{backup_date}.json, indexé par date) et donc de
+# reprendre exactement où il s'est arrêté, y compris un jour plus tard.
+backup_date    = dbutils.widgets.get("backup_date").strip() or str(date.today())
 lib_path       = dbutils.widgets.get("lib_path")
 retain_daily   = dbutils.widgets.get("retain_daily")
 retain_weekly  = dbutils.widgets.get("retain_weekly")
@@ -49,6 +52,8 @@ ENABLE_MONTHLY = "false"
 # retain_weekly n'est plus transmis qu'à 06_retention, pour purger les anciens snapshots weekly
 # déjà existants au fil du temps (aucun nouveau n'est créé).
 ENABLE_WEEKLY  = "false"
+
+print(f"[INFO] backup_date={backup_date} | backup_root={backup_root} | retain_daily={retain_daily}j")
 
 steps = []
 global_status = "success"

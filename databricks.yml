@@ -68,6 +68,10 @@ resources:
             base_parameters:
               backup_root:    ${var.backup_root}
               lib_path:       ${var.lib_path}
+              # Vide = date du jour. À renseigner (AAAA-MM-JJ) via « Run now with different
+              # parameters » pour reprendre un run interrompu : le checkpoint est indexé par
+              # date, donc seule cette date permet de retrouver la progression du run coupé.
+              backup_date:    ""
               retain_daily:   ${var.retain_daily}
               retain_weekly:  ${var.retain_weekly}
               retain_monthly: ${var.retain_monthly}

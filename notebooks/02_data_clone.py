@@ -128,7 +128,9 @@ if resume_mode:
 # COMMAND ----------
 # DBTITLE 1, Versions Delta connues (skip si source inchangée depuis le dernier clone réussi)
 
-_last_versions_lock = threading.Lock()
+_last_versions_lock  = threading.Lock()
+_last_versions_count = 0
+LAST_VERSIONS_EVERY  = 5  # écrire sur ADLS toutes les N tables (même cadence que le checkpoint)
 
 def load_last_versions() -> dict:
     try:
@@ -137,9 +139,32 @@ def load_last_versions() -> dict:
         print(f"[WARN] load_last_versions({last_versions_path}) a échoué : {e}")
         return {}
 
-def save_last_versions(versions: dict) -> None:
+def _write_last_versions(versions: dict) -> None:
+    """Écriture ADLS. L'appelant doit déjà détenir _last_versions_lock
+    (threading.Lock n'est pas réentrant)."""
+    _uc_put(last_versions_path, json.dumps(versions, indent=2))
+
+def record_last_version(fqn: str, version) -> None:
+    """Mémorise la version source clonée et écrit périodiquement sur ADLS.
+
+    Le flush périodique est indispensable : le checkpoint est indexé par date
+    (_checkpoints/{backup_date}.json), donc un job tué par le timeout ne reprend
+    que si on le relance le même jour. Sans écriture intermédiaire ici, la seule
+    autre voie de reprise — le skip par version — serait vide elle aussi le
+    lendemain, puisque l'écriture finale n'est jamais atteinte. Le run suivant
+    reclonerait alors l'intégralité du périmètre.
+    """
+    global _last_versions_count
     with _last_versions_lock:
-        _uc_put(last_versions_path, json.dumps(versions, indent=2))
+        new_last_versions[fqn] = version
+        _last_versions_count += 1
+        if _last_versions_count % LAST_VERSIONS_EVERY == 0:
+            _write_last_versions(new_last_versions)
+
+def flush_last_versions() -> None:
+    """Écriture finale — garantit que les tables du dernier lot incomplet sont retenues."""
+    with _last_versions_lock:
+        _write_last_versions(new_last_versions)
 
 def get_source_version(catalog: str, schema: str, table: str):
     """Dernière version Delta commitée sur la table source, ou None si indisponible
@@ -194,8 +219,7 @@ def clone_one(args: tuple) -> dict:
         print(f"[{ts}] ({idx}/{pending_total}) → {fqn} — [SKIP] version Delta inchangée ({source_version})")
         already_done[fqn] = entry
         save_checkpoint(already_done)
-        with _last_versions_lock:
-            new_last_versions[fqn] = source_version
+        record_last_version(fqn, source_version)
         return entry
 
     print(f"[{ts}] ({idx}/{pending_total}) → {fqn}")
@@ -238,8 +262,7 @@ def clone_one(args: tuple) -> dict:
             print(f"  [WARN] Propriétés Delta non définies sur {dest}: {_e}")
 
         if source_version is not None:
-            with _last_versions_lock:
-                new_last_versions[fqn] = source_version
+            record_last_version(fqn, source_version)
 
     except Exception as e:
         elapsed = time.time() - t0
@@ -272,7 +295,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor
     new_results = list(executor.map(clone_one, args_list))
 
 flush_checkpoint(already_done)  # garantit l'écriture finale
-save_last_versions(new_last_versions)
+flush_last_versions()
 
 # Résultats complets (checkpoint précédent + nouveau run)
 clone_results = list(already_done.values())
