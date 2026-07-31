@@ -370,23 +370,62 @@ add_heading(doc, "2.6 Créer le Service Principal", 2)
 
 doc.add_paragraph(
     "Les jobs planifiés ne doivent pas dépendre d'un compte nominatif : le départ de la "
-    "personne concernée interromprait les sauvegardes. Un Service Principal est donc requis. "
-    "Sa création nécessite des droits d'administration sur Microsoft Entra ID."
+    "personne concernée interromprait les sauvegardes. Un Service Principal est donc requis."
 )
 
-add_heading(doc, "A — Créer l'App Registration dans Microsoft Entra ID", 3)
+doc.add_paragraph(
+    "Deux types de Service Principal conviennent. Le choix détermine le secret utilisé, et "
+    "donc la configuration de la CLI au §4.3 — les deux ne se configurent pas de la même "
+    "manière."
+)
+
+add_table(
+    doc,
+    ["Type", "Créé depuis", "Droits requis"],
+    [
+        ["Géré par Databricks", "Console de compte Databricks", "Administrateur Databricks uniquement"],
+        ["Adossé à Microsoft Entra ID", "Portail Azure, App registration", "Administrateur Microsoft Entra ID"],
+    ],
+    col_widths=[4, 6, 6],
+)
+
+add_note(
+    doc,
+    "un Service Principal géré par Databricks suffit ici, et évite de dépendre d'un "
+    "administrateur Azure. L'accès au stockage ne passe pas par l'identité du Service "
+    "Principal mais par le Storage Credential adossé à l'Access Connector (§2.3) : le Service "
+    "Principal n'a donc besoin d'aucune identité côté Azure.",
+)
+
+add_heading(doc, "A — Option 1 : Service Principal géré par Databricks", 3)
+numbered(doc, "Console de compte Databricks (accounts.azuredatabricks.net), onglet User management, Service principals, Add service principal.")
+numbered(doc, "Choisir Databricks managed. Nom, par exemple sp-databricks-dr-backup.")
+numbered(doc, "Ouvrir le Service Principal créé, onglet Secrets, Generate secret. Relever le Client ID et le Secret : le secret n'est affiché qu'une seule fois et ne peut pas être relu ensuite.")
+numbered(doc, "Onglet Workspaces, affecter le Service Principal au workspace concerné.")
+
+add_note(
+    doc,
+    "ce couple Client ID / Secret se configure avec les champs client_id et client_secret "
+    "(§4.3, variante A).",
+)
+
+add_heading(doc, "B — Option 2 : Service Principal adossé à Microsoft Entra ID", 3)
 numbered(doc, "Portail Azure, Microsoft Entra ID, App registrations, New registration.")
 numbered(doc, "Nom, par exemple sp-databricks-dr-backup. Type de compte : single tenant.")
 numbered(doc, "Relever l'Application (client) ID et le Directory (tenant) ID.")
 numbered(doc, "Onglet Certificates & secrets, New client secret. Relever la valeur immédiatement : elle n'est plus affichée ensuite.")
+numbered(doc, "Dans Databricks, console d'administration du workspace, Identity and access, Service principals, Add service principal, puis renseigner l'Application ID.")
 
-add_heading(doc, "B — Déclarer le Service Principal dans Databricks", 3)
-numbered(doc, "Console d'administration du workspace, onglet Identity and access, Service principals, Add service principal.")
-numbered(doc, "Renseigner l'Application ID relevé à l'étape A.")
-numbered(doc, "Lui accorder l'entitlement Workspace access, et Can manage sur les jobs après déploiement (ou le déclarer propriétaire des jobs).")
+add_note(
+    doc,
+    "ce triplet se configure avec les champs azure_client_id, azure_client_secret et "
+    "azure_tenant_id (§4.3, variante B), et non avec client_id / client_secret.",
+)
 
-add_heading(doc, "C — Donner accès au stockage au Service Principal", 3)
-doc.add_paragraph("Exécuter les GRANT du §2.5 en utilisant l'Application ID comme principal.")
+add_heading(doc, "C — Droits à accorder, quelle que soit l'option retenue", 3)
+numbered(doc, "Entitlement Workspace access sur le Service Principal, dans la console d'administration du workspace.")
+numbered(doc, "Permission Can manage sur les jobs après déploiement, ou déclarer le Service Principal propriétaire des jobs.")
+numbered(doc, "GRANT du §2.5 sur l'External Location et sur chaque catalog à sauvegarder, en utilisant le Client ID (ou l'Application ID) comme principal.")
 
 add_note(
     doc,
@@ -554,23 +593,104 @@ add_code(
 
 add_heading(doc, "4.3 Configurer l'authentification de la CLI", 2)
 
-doc.add_paragraph("Créer ou éditer le fichier de profils, puis vérifier la connexion :")
+doc.add_paragraph(
+    "La CLI lit ses identifiants dans un fichier de profils. Chaque profil est une section "
+    "indépendante : ajouter un profil ne modifie jamais les autres."
+)
+
+add_code(doc, "# Emplacement\n# Linux / macOS : ~/.databrickscfg\n# Windows       : %USERPROFILE%\\.databrickscfg")
+
+add_warning(
+    doc,
+    "les champs à renseigner dépendent du type de Service Principal choisi au §2.6. Un secret "
+    "Microsoft Entra ID placé dans les champs client_id / client_secret produit une erreur 401 "
+    "à l'authentification. Voir Annexe A.7.",
+)
+
+add_heading(doc, "Variante A — Service Principal géré par Databricks (§2.6, option 1)", 3)
 
 add_code(
     doc,
-    "# ~/.databrickscfg  (Windows : %USERPROFILE%\\.databrickscfg)\n"
     "[prod]\n"
     "host          = https://adb-1234567890123456.7.azuredatabricks.net\n"
-    "client_id     = <application-id-du-service-principal>\n"
-    "client_secret = <client-secret>",
+    "client_id     = <client-id-du-service-principal>\n"
+    "client_secret = <secret-genere-dans-databricks>",
 )
 
-add_code(doc, "databricks current-user me --profile prod")
+add_heading(doc, "Variante B — Service Principal Microsoft Entra ID (§2.6, option 2)", 3)
+
+add_code(
+    doc,
+    "[prod]\n"
+    "host                = https://adb-1234567890123456.7.azuredatabricks.net\n"
+    "azure_client_id     = <application-id>\n"
+    "azure_client_secret = <client-secret-entra-id>\n"
+    "azure_tenant_id     = <directory-tenant-id>",
+)
 
 add_warning(
     doc,
     "le champ host attend l'URL du workspace Databricks, jamais celle du compte de stockage. "
     "Voir Annexe A.3.",
+)
+
+add_heading(doc, "Vérifier la configuration", 3)
+
+add_code(
+    doc,
+    "databricks auth profiles                    # le profil doit apparaitre Valid : YES\n"
+    "databricks current-user me --profile prod\n"
+    "databricks jobs list --profile prod         # confirme l'acces effectif au workspace",
+)
+
+doc.add_paragraph(
+    "Pour un Service Principal, la réponse ne contient pas d'adresse e-mail : le champ "
+    "userName vaut le Client ID. C'est le comportement attendu."
+)
+
+add_code(
+    doc,
+    "{\n"
+    '  "active": true,\n'
+    '  "displayName": "sp-databricks-dr-backup",\n'
+    '  "userName": "12345678-90ab-cdef-1234-567890abcdef"\n'
+    "}",
+)
+
+add_heading(doc, "Gérer plusieurs environnements sans risque d'erreur", 3)
+
+doc.add_paragraph(
+    "Lorsque plusieurs workspaces sont administrés depuis le même poste, le risque n'est pas "
+    "que les profils interfèrent entre eux, mais d'exécuter une commande sur le mauvais. Trois "
+    "précautions suffisent :"
+)
+
+bullet(doc, "Nommer les profils par environnement explicite (client-prod, client-test) plutôt que prod ou dev, ambigus dès le deuxième projet.")
+bullet(doc, "Ne pas définir de profil par défaut : une commande sans --profile échouera franchement, au lieu de s'exécuter sur un workspace choisi implicitement.")
+bullet(doc, "Associer le profil à la cible directement dans databricks.yml, ce qui rend le --profile inutile et protège contre l'erreur de cible.")
+
+add_code(
+    doc,
+    "targets:\n"
+    "  prod:\n"
+    "    workspace:\n"
+    "      host: https://adb-1234567890123456.7.azuredatabricks.net\n"
+    "      profile: client-prod",
+)
+
+add_note(
+    doc,
+    "avec cette déclaration, la CLI refuse de déployer si le host du profil ne correspond pas "
+    "à celui déclaré dans la cible. C'est le garde-fou le plus efficace contre un déploiement "
+    "sur le mauvais workspace.",
+)
+
+add_warning(
+    doc,
+    "les variables d'environnement DATABRICKS_HOST et DATABRICKS_TOKEN sont prioritaires sur "
+    "le fichier de profils. Définies de façon permanente, elles détournent silencieusement "
+    "toutes les commandes, y compris celles des autres projets. Ne les utiliser que dans un "
+    "terminal ponctuel.",
 )
 
 add_heading(doc, "4.4 Tester la connectivité de bout en bout", 2)
@@ -1103,6 +1223,39 @@ doc.add_paragraph(
     "Le point 3 est le seul réellement problématique et le seul silencieux. C'est la raison "
     "pour laquelle le point 1 de la validation du §7 consiste à recouper le nombre de tables "
     "sauvegardées avec celui relevé lors de l'audit."
+)
+
+add_heading(doc, "A.7 Erreur 401 à l'authentification du Service Principal", 2)
+
+add_code(doc, "Error: 401 Unauthorized")
+
+doc.add_paragraph(
+    "Cause la plus fréquente : le secret renseigné ne correspond pas au type de champ utilisé. "
+    "Un Service Principal peut détenir deux secrets de nature différente, qui ne se "
+    "configurent pas avec les mêmes clés."
+)
+
+add_table(
+    doc,
+    ["Origine du secret", "Champs à utiliser"],
+    [
+        ["Généré dans Databricks (console de compte, onglet Secrets)", "client_id, client_secret"],
+        ["Généré dans Microsoft Entra ID (App registration)", "azure_client_id, azure_client_secret, azure_tenant_id"],
+    ],
+    col_widths=[8, 8],
+)
+
+doc.add_paragraph("Autres causes, à vérifier ensuite :")
+
+bullet(doc, "Secret expiré : un secret Entra ID a une durée de validité définie à sa création.")
+bullet(doc, "Secret tronqué à la copie, ou espace résiduel en fin de ligne dans le fichier de profils.")
+bullet(doc, "Fichier enregistré sous un nom incorrect. Sous Windows, le Bloc-notes ajoute une extension .txt si le nom n'est pas saisi entre guillemets.")
+
+add_note(
+    doc,
+    "une erreur 401 signifie que l'identité n'a pas été reconnue. Une erreur 403 signifie "
+    "l'inverse : l'identité est valide mais ne dispose pas des droits nécessaires. Distinguer "
+    "les deux oriente immédiatement le diagnostic.",
 )
 
 doc.add_page_break()
