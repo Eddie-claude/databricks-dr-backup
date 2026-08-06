@@ -42,6 +42,8 @@ dbutils.widgets.text("max_parallel",    "4",           "Clones parallèles pour 
 dbutils.widgets.text("force_snapshot",  "false",       "Forcer weekly+monthly quel que soit le jour (tests)")
 dbutils.widgets.text("enable_monthly",  "false",       "Activer snapshot mensuel — false dans le job daily, true dans dr-backup-monthly")
 dbutils.widgets.text("enable_weekly",   "false",       "Activer création snapshot weekly — désactivé (Option C, non supporté sur tables non-MANAGED UC)")
+dbutils.widgets.text("enable_vacuum",   "true",        "Activer le VACUUM — false dans le job monthly (le daily en est le seul propriétaire)")
+dbutils.widgets.text("vacuum_dow",      "7",           "Jour du VACUUM : 1=lundi … 7=dimanche, 0=tous les jours")
 
 backup_root     = dbutils.widgets.get("backup_root")
 backup_date     = dbutils.widgets.get("backup_date")
@@ -53,6 +55,8 @@ max_parallel    = max(1, int(dbutils.widgets.get("max_parallel")))
 force_snapshot  = dbutils.widgets.get("force_snapshot").lower()  == "true"
 enable_monthly  = dbutils.widgets.get("enable_monthly").lower()  == "true"
 enable_weekly   = dbutils.widgets.get("enable_weekly").lower()   == "true"
+enable_vacuum   = dbutils.widgets.get("enable_vacuum").lower()   == "true"
+vacuum_dow      = max(0, min(7, int(dbutils.widgets.get("vacuum_dow"))))
 
 today            = date.fromisoformat(backup_date)
 incremental_root = f"{backup_root}/incremental"
@@ -274,8 +278,26 @@ for label in del_daily:
 # COMMAND ----------
 vacuum_results = []
 
+# Le VACUUM est dominé par le listing récursif des fichiers de chaque table sur ADLS, coût payé
+# intégralement même quand rien n'est à supprimer. Mesuré chez un client : 2 h 40 pour 2 398
+# tables et 0 fichier supprimé, soit plus de la moitié de la durée totale du backup quotidien.
+# Deux leviers, tous les deux appliqués ici :
+#   1. parallélisation sur max_parallel (le reste du notebook le faisait déjà, pas cette boucle)
+#   2. fréquence hebdomadaire — un VACUUM hebdomadaire purge exactement autant qu'un VACUUM
+#      quotidien, il rattrape simplement plusieurs jours d'un coup.
+# À NE PAS faire : filtrer sur les tables modifiées du jour. Un fichier devient éligible quand
+# il dépasse deletedFileRetentionDuration, pas quand la table change — une table statique depuis
+# 40 jours a des fichiers qui franchissent le seuil aujourd'hui sans qu'elle ait bougé.
+do_vacuum = enable_vacuum and (vacuum_dow == 0 or iso_dow == vacuum_dow)
+
 print(f"\n{'─'*60}")
-print(f"{'[DRY-RUN] ' if dry_run else ''}VACUUM — {len(incremental_tables)} table(s)")
+if not enable_vacuum:
+    print("[INFO] VACUUM désactivé (enable_vacuum=false)")
+elif not do_vacuum:
+    print(f"[INFO] VACUUM ignoré — jour {iso_dow}, planifié le jour {vacuum_dow} (1=lundi, 7=dimanche)")
+else:
+    print(f"{'[DRY-RUN] ' if dry_run else ''}VACUUM — {len(incremental_tables)} table(s), "
+          f"{max_parallel} en parallèle")
 print(f"{'─'*60}")
 
 def get_vacuum_metrics(path: str) -> dict:
@@ -293,11 +315,10 @@ def get_vacuum_metrics(path: str) -> dict:
     except Exception:
         return {"num_deleted_files": None, "num_vacuumed_directories": None}
 
-for src_path in incremental_tables:
+def vacuum_one(src_path: str) -> dict:
     if dry_run:
         print(f"  [DRY-RUN] VACUUM delta.`{src_path}`")
-        vacuum_results.append({"table": src_path, "status": "dry_run"})
-        continue
+        return {"table": src_path, "status": "dry_run"}
     try:
         spark.sql(f"VACUUM delta.`{src_path}`")
         vmetrics    = get_vacuum_metrics(src_path)
@@ -309,16 +330,17 @@ for src_path in incremental_tables:
         elif num_deleted == 0:
             print(f"  [OK] VACUUM {src_path} — rien à purger (dans la fenêtre de rétention)")
         else:
-            print(f"  [OK] VACUUM {src_path} — {num_deleted} fichier(s) supprimé(s), {num_dirs} dossier(s)")
+            print(f"  [OK] VACUUM {src_path} — {num_deleted} fichier(s) supprimé(s), "
+                  f"{num_dirs} dossier(s) parcouru(s)")
 
-        vacuum_results.append({
-            "table":  src_path,
-            "status": "success",
-            **vmetrics,
-        })
+        return {"table": src_path, "status": "success", **vmetrics}
     except Exception as e:
         print(f"  [ERROR] VACUUM {src_path}: {e}")
-        vacuum_results.append({"table": src_path, "status": "error", "error": str(e)})
+        return {"table": src_path, "status": "error", "error": str(e)}
+
+if do_vacuum and incremental_tables:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as ex:
+        vacuum_results = list(ex.map(vacuum_one, incremental_tables))
 
 vacuum_ok           = sum(1 for r in vacuum_results if r["status"] == "success")
 vacuum_error        = sum(1 for r in vacuum_results if r["status"] == "error")
@@ -326,10 +348,13 @@ vacuum_files_deleted = sum(r.get("num_deleted_files") or 0 for r in vacuum_resul
 vacuum_dirs_deleted  = sum(r.get("num_vacuumed_directories") or 0 for r in vacuum_results if r["status"] == "success")
 vacuum_tables_cleaned = sum(1 for r in vacuum_results if r["status"] == "success" and (r.get("num_deleted_files") or 0) > 0)
 
-print(f"""
+if do_vacuum:
+    # numVacuumedDirectories compte les dossiers PARCOURUS, pas vidés — libellé volontairement
+    # explicite, l'ancien « dossier(s) vidé(s) » laissait croire à des suppressions.
+    print(f"""
 [OK] VACUUM : {vacuum_ok} table(s) traitée(s), {vacuum_error} erreur(s)
      {vacuum_tables_cleaned} table(s) avec des fichiers réellement supprimés
-     {vacuum_files_deleted} fichier(s) supprimé(s) au total, {vacuum_dirs_deleted} dossier(s) vidé(s)
+     {vacuum_files_deleted} fichier(s) supprimé(s) au total, {vacuum_dirs_deleted} dossier(s) parcouru(s)
 """)
 
 # COMMAND ----------
@@ -351,6 +376,8 @@ summary = {
     "deleted_count":     len(deleted),
     "error_count":       len(errors),
     "deleted_paths":     deleted,
+    "vacuum_executed":         do_vacuum,
+    "vacuum_dow":              vacuum_dow,
     "vacuum_ok":               vacuum_ok,
     "vacuum_error":            vacuum_error,
     "vacuum_tables_cleaned":   vacuum_tables_cleaned,
@@ -369,8 +396,8 @@ print(f"""
 ║  Monthly  : {(month_label if do_monthly else 'ignoré'):<20} ({m_ok} tables OK)
 ║  {prefix}Supprimés : {len(deleted):<4} dossiers
 ║  Erreurs  : {len(errors):<4}
-║  {prefix}VACUUM    : {vacuum_ok:<4} tables traitées, {vacuum_error} erreurs
-║             {vacuum_tables_cleaned:<4} tables nettoyées ({vacuum_files_deleted} fichiers, {vacuum_dirs_deleted} dossiers)
+║  {prefix}VACUUM    : {(f'{vacuum_ok} tables traitées, {vacuum_error} erreurs' if do_vacuum else f'ignoré (planifié jour {vacuum_dow})')}
+║             {vacuum_tables_cleaned:<4} tables nettoyées ({vacuum_files_deleted} fichiers supprimés)
 ╚══════════════════════════════════════════════╝
 """)
 

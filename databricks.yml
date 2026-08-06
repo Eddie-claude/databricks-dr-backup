@@ -27,6 +27,12 @@ variables:
   max_parallel_monthly:
     description: "Threads parallèles pour le snapshot mensuel (DEEP CLONE)"
     default: "8"
+  vacuum_dow:
+    description: "Jour du VACUUM sur incremental/ : 1=lundi … 7=dimanche, 0=tous les jours. Hebdomadaire par défaut — un VACUUM hebdomadaire purge autant qu'un quotidien, pour une fraction du temps (mesuré : 2h40/nuit pour 0 fichier supprimé avant ce changement)."
+    default: "7"
+  log_path:
+    description: "Racine d'archivage des logs de cluster. Chemin DBFS obligatoire : cluster_log_conf n'accepte pas d'URI abfss://. Vider cette variable et retirer les blocs cluster_log_conf si le workspace interdit l'accès à DBFS."
+    default: "dbfs:/cluster-logs/dr-backup"
 
 # ── Ressources ────────────────────────────────────────────────────────────────
 resources:
@@ -62,6 +68,12 @@ resources:
             node_type_id: "Standard_DS4_v2"
             num_workers: 4
             data_security_mode: "SINGLE_USER"
+            # Les logs du driver disparaissent avec le cluster du job. Archivés ici, ils restent
+            # consultables après coup — indispensable pour diagnostiquer à distance sans demander
+            # au client d'extraire une sortie de notebook tronquée par l'interface.
+            cluster_log_conf:
+              dbfs:
+                destination: ${var.log_path}/daily
           timeout_seconds: 28800   # 8h — suffisant pour backup incrémental
           notebook_task:
             notebook_path: ./notebooks/00_orchestrator.py
@@ -76,6 +88,7 @@ resources:
               retain_weekly:  ${var.retain_weekly}
               retain_monthly: ${var.retain_monthly}
               dry_run:        ${var.dry_run}
+              vacuum_dow:     ${var.vacuum_dow}
           email_notifications:
             on_failure:
               - ${var.notification_email}
@@ -103,6 +116,9 @@ resources:
             node_type_id: "Standard_DS4_v2"
             num_workers: 4
             data_security_mode: "SINGLE_USER"
+            cluster_log_conf:
+              dbfs:
+                destination: ${var.log_path}/monthly
           timeout_seconds: 86400   # 24h — couvre le DEEP CLONE de 17 TB
           notebook_task:
             notebook_path: ./notebooks/06_retention.py
@@ -115,6 +131,9 @@ resources:
               enable_monthly: "true"
               force_snapshot: "false"
               max_parallel:   ${var.max_parallel_monthly}
+              # Le VACUUM sur incremental/ appartient au job daily — le dupliquer ici ferait
+              # payer deux fois le listing ADLS complet, sans rien purger de plus.
+              enable_vacuum:  "false"
           email_notifications:
             on_failure:
               - ${var.notification_email}

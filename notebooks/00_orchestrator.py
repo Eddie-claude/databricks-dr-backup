@@ -33,7 +33,8 @@ dbutils.widgets.text("retain_daily",   "30",    "Rétention quotidienne (jours)"
 dbutils.widgets.text("retain_weekly",  "2",     "Rétention hebdomadaire (semaines) — legacy, purge uniquement")
 dbutils.widgets.text("retain_monthly", "1",     "Rétention mensuelle (mois)")
 dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simulation)")
-dbutils.widgets.text("max_parallel",   "8",     "Clones simultanés dans 02_data_clone — aligné sur spark.master local[*, 8]")
+dbutils.widgets.text("max_parallel",   "8",     "Opérations simultanées (clones dans 02, VACUUM dans 06)")
+dbutils.widgets.text("vacuum_dow",     "7",     "Jour du VACUUM : 1=lundi … 7=dimanche, 0=tous les jours")
 
 backup_root    = dbutils.widgets.get("backup_root")
 # Vide = aujourd'hui. Renseigner explicitement la date d'un run interrompu permet de
@@ -46,6 +47,7 @@ retain_weekly  = dbutils.widgets.get("retain_weekly")
 retain_monthly = dbutils.widgets.get("retain_monthly")
 dry_run        = dbutils.widgets.get("dry_run")
 max_parallel   = dbutils.widgets.get("max_parallel")
+vacuum_dow     = dbutils.widgets.get("vacuum_dow")
 # Snapshot mensuel désactivé dans le job daily — géré par le job dr-backup-monthly
 ENABLE_MONTHLY = "false"
 # Snapshot weekly abandonné (Option C) — SHALLOW CLONE non supporté sur tables non-MANAGED UC.
@@ -119,6 +121,15 @@ _uc_put(manifest_path, json.dumps(current_manifest, indent=2))
 print(f"[OK] Manifest écrit : {manifest_path}")
 
 # COMMAND ----------
+# DBTITLE 1, Étape 3 — Workspace Config (non critique)
+
+# DOIT rester avant la complétion du manifest ci-dessous : c'est cette étape qui écrit
+# jobs/jobs_all.json et notebooks/ pour la date courante. Placée après, la complétion ne
+# trouvait ces fichiers que si le job avait déjà tourné le même jour — donc jamais au premier
+# run d'une journée, laissant jobs et notebooks vides dans le manifest et faussant le diff.
+run_step("workspace_config", "./05_workspace_config", base_params, critical=False)
+
+# COMMAND ----------
 # DBTITLE 1, Compléter le manifest avec les assets workspace (exportés par 05_workspace_config)
 
 # Ces chemins sont produits par 05_workspace_config.py, qui tourne juste avant (étape 3,
@@ -151,8 +162,23 @@ def _list_notebooks_recursive(path):
         pass
     return files
 
+def _notebook_relative_path(full_path: str) -> str:
+    """Chemin relatif à {backup_date}/notebooks/, ex: 'Shared/AdminScript/ControleTags.py'.
+
+    Indispensable pour le diff : un chemin absolu contient la date du backup, donc change
+    mécaniquement chaque jour. Comparés tels quels, 100 % des notebooks apparaissaient
+    ajoutés ET supprimés à chaque run, avec 0 inchangé — indéfiniment.
+    Le découpage se fait sur le marqueur plutôt que par str.replace du préfixe, pour rester
+    insensible à une éventuelle normalisation de l'URI par dbutils.fs.ls.
+    """
+    marker = f"/{backup_date}/notebooks/"
+    return full_path.split(marker, 1)[1] if marker in full_path else full_path
+
 try:
-    nb_files = _list_notebooks_recursive(workspace_notebooks_manifest)
+    nb_files = sorted(
+        _notebook_relative_path(p)
+        for p in _list_notebooks_recursive(workspace_notebooks_manifest)
+    )
     current_manifest["notebooks"] = nb_files
     print(f"[OK] {len(nb_files)} notebooks listés dans le manifest")
 except Exception as e:
@@ -161,11 +187,6 @@ except Exception as e:
 # Réécrire le manifest complété
 _uc_put(manifest_path, json.dumps(current_manifest, indent=2))
 print(f"[OK] Manifest complété : {manifest_path}")
-
-# COMMAND ----------
-# DBTITLE 1, Étape 3 — Workspace Config (non critique)
-
-run_step("workspace_config", "./05_workspace_config", base_params, critical=False)
 
 # COMMAND ----------
 # DBTITLE 1, Étape 4 — Diff (non critique)
@@ -203,6 +224,11 @@ run_step("retention", "./06_retention", {
     "dry_run":        dry_run,
     "enable_monthly": ENABLE_MONTHLY,
     "enable_weekly":  ENABLE_WEEKLY,
+    # Le job daily est le seul propriétaire du VACUUM sur incremental/ — le job monthly
+    # passe enable_vacuum=false pour ne pas le dupliquer.
+    "enable_vacuum":  "true",
+    "vacuum_dow":     vacuum_dow,
+    "max_parallel":   max_parallel,
 }, critical=False)
 
 # COMMAND ----------

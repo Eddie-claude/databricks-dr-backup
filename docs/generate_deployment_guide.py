@@ -1,116 +1,34 @@
-"""Génère DR_Backup_Guide_Deploiement_v4.docx.
+"""Génère DR_Backup_Guide_Deploiement_v4.1.docx.
 
 Adapté de old/generate_guide.py (v3, 3 juin 2026) pour conserver la charte des guides
-livrés au client. Mis à jour pour refléter l'état du code après les correctifs de juillet :
-weekly abandonné (Option C), retain_daily=30, step VACUUM, cluster daily multi-worker,
+livrés au client. Reflète l'état du code après les correctifs de juillet et d'août :
+weekly abandonné (Option C), retain_daily=30, VACUUM hebdomadaire et parallélisé,
+cluster daily multi-worker, reprise d'un jour sur l'autre, archivage des logs,
 notebooks de restauration 07 à 11, annexes dépannage.
+
+La charte est dans docs/docx_style.py, partagée avec generate_release_notes.py.
 
 Usage : python docs/generate_deployment_guide.py
 """
 
-from docx import Document
 from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 import datetime
 import os
 
-BLUE = (0x1F, 0x49, 0x7D)
+from docx_style import (
+    BLUE,
+    new_document,
+    add_heading,
+    add_code,
+    add_table,
+    add_note,
+    add_warning,
+    bullet,
+    numbered,
+)
 
-doc = Document()
-
-style_normal = doc.styles["Normal"]
-style_normal.font.name = "Calibri"
-style_normal.font.size = Pt(11)
-
-
-# ── Helpers de mise en forme (identiques à v3) ────────────────────────────────
-
-def add_heading(doc, text, level, color=BLUE):
-    h = doc.add_heading(text, level=level)
-    h.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    for run in h.runs:
-        if color:
-            run.font.color.rgb = RGBColor(*color)
-    return h
-
-
-def add_code(doc, text):
-    p = doc.add_paragraph()
-    p.paragraph_format.left_indent = Cm(0.5)
-    p.paragraph_format.space_before = Pt(2)
-    p.paragraph_format.space_after = Pt(2)
-    run = p.add_run(text)
-    run.font.name = "Courier New"
-    run.font.size = Pt(9)
-    run.font.color.rgb = RGBColor(*BLUE)
-    pPr = p._p.get_or_add_pPr()
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:val"), "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"), "F0F0F0")
-    pPr.append(shd)
-    return p
-
-
-def add_table(doc, headers, rows, col_widths=None):
-    table = doc.add_table(rows=1, cols=len(headers))
-    table.style = "Table Grid"
-    table.alignment = WD_TABLE_ALIGNMENT.LEFT
-    hdr = table.rows[0].cells
-    for i, h in enumerate(headers):
-        hdr[i].text = h
-        for run in hdr[i].paragraphs[0].runs:
-            run.font.bold = True
-        tcPr = hdr[i]._tc.get_or_add_tcPr()
-        shd = OxmlElement("w:shd")
-        shd.set(qn("w:val"), "clear")
-        shd.set(qn("w:color"), "auto")
-        shd.set(qn("w:fill"), "1F497D")
-        tcPr.append(shd)
-        for para in hdr[i].paragraphs:
-            for run in para.runs:
-                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-    for row_data in rows:
-        row = table.add_row().cells
-        for i, val in enumerate(row_data):
-            row[i].text = val
-    if col_widths:
-        for i, w in enumerate(col_widths):
-            for row in table.rows:
-                row.cells[i].width = Cm(w)
-    doc.add_paragraph()
-    return table
-
-
-def add_note(doc, text, prefix="Note : "):
-    p = doc.add_paragraph()
-    run = p.add_run(prefix + text)
-    run.font.italic = True
-    run.font.size = Pt(10)
-    run.font.color.rgb = RGBColor(0x70, 0x70, 0x70)
-    p.paragraph_format.left_indent = Cm(0.5)
-    return p
-
-
-def add_warning(doc, text, prefix="Attention : "):
-    p = doc.add_paragraph()
-    run = p.add_run(prefix + text)
-    run.font.bold = True
-    run.font.size = Pt(10)
-    run.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
-    p.paragraph_format.left_indent = Cm(0.5)
-    return p
-
-
-def bullet(doc, text):
-    return doc.add_paragraph(text, style="List Bullet")
-
-
-def numbered(doc, text):
-    return doc.add_paragraph(text, style="List Number")
+doc = new_document()
 
 
 # ── Page de titre ─────────────────────────────────────────────────────────────
@@ -131,7 +49,7 @@ run.font.color.rgb = RGBColor(0x40, 0x40, 0x40)
 
 version = doc.add_paragraph()
 version.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = version.add_run("Version 4.0")
+run = version.add_run("Version 4.1")
 run.font.size = Pt(13)
 run.font.bold = True
 run.font.color.rgb = RGBColor(0x40, 0x40, 0x40)
@@ -147,7 +65,7 @@ doc.add_paragraph()
 doc.add_paragraph()
 changelog = doc.add_paragraph()
 changelog.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = changelog.add_run("Nouveautés de la version 4.0")
+run = changelog.add_run("Nouveautés de la version 4.1")
 run.font.size = Pt(11)
 run.font.bold = True
 doc.add_paragraph()
@@ -156,6 +74,9 @@ add_table(
     doc,
     ["Changement", "Section"],
     [
+        ["VACUUM parallélisé et ramené à une exécution hebdomadaire", "§6.3"],
+        ["Reprise d'un backup interrompu d'un jour sur l'autre", "§5.3"],
+        ["Archivage automatique des logs de cluster", "§4.6"],
         ["Cluster du backup quotidien dimensionné en multi-worker", "§5.1"],
         ["Snapshot hebdomadaire abandonné, rétention quotidienne portée à 30 jours", "§6"],
         ["Étape VACUUM explicite ajoutée à la politique de rétention", "§6.3"],
@@ -751,6 +672,53 @@ add_warning(
     "problème est réseau et non lié à la solution. Un contournement est décrit en Annexe A.1.",
 )
 
+add_heading(doc, "4.6 Archivage des logs de cluster", 2)
+
+doc.add_paragraph(
+    "Les clusters des jobs sont créés à chaque exécution puis détruits : leurs logs "
+    "disparaissent avec eux, et la sortie affichée dans l'interface est tronquée au-delà d'un "
+    "certain volume. Pour permettre un diagnostic après coup, les deux jobs archivent "
+    "automatiquement leurs logs."
+)
+
+add_code(
+    doc,
+    "cluster_log_conf:\n"
+    "  dbfs:\n"
+    "    destination: dbfs:/cluster-logs/dr-backup/daily",
+)
+
+add_table(
+    doc,
+    ["Job", "Destination"],
+    [
+        ["dr-backup-daily", "dbfs:/cluster-logs/dr-backup/daily"],
+        ["dr-backup-monthly", "dbfs:/cluster-logs/dr-backup/monthly"],
+    ],
+    col_widths=[5, 11],
+)
+
+doc.add_paragraph(
+    "Chaque exécution y dépose un sous-dossier daté contenant les journaux du driver "
+    "(stdout, stderr, log4j). Consultation depuis un notebook :"
+)
+
+add_code(doc, 'dbutils.fs.ls("dbfs:/cluster-logs/dr-backup/daily")')
+
+add_warning(
+    doc,
+    "cette destination doit être un chemin DBFS : le paramètre cluster_log_conf n'accepte pas "
+    "d'URI abfss://. Si la politique du workspace interdit l'accès à DBFS, retirer les blocs "
+    "cluster_log_conf de databricks.yml — les jobs fonctionnent sans, seul le diagnostic "
+    "a posteriori est perdu.",
+)
+
+add_note(
+    doc,
+    "ces logs ne sont pas purgés automatiquement. Prévoir un nettoyage périodique si l'espace "
+    "occupé devient un sujet.",
+)
+
 doc.add_page_break()
 
 
@@ -824,15 +792,39 @@ doc.add_paragraph(
 add_heading(doc, "5.3 Comportement en cas d'interruption", 2)
 
 doc.add_paragraph(
-    "Un dépassement du délai maximal du job n'est pas une perte de travail. La progression "
-    "est enregistrée sur le stockage toutes les 5 tables, dans "
-    "incremental/_checkpoints/{date}.json. La ré-exécution le même jour reprend là où le run "
-    "précédent s'est arrêté, sans recloner ce qui est déjà fait."
+    "Un dépassement du délai maximal du job n'est pas une perte de travail. Deux mécanismes "
+    "distincts assurent la reprise, selon le moment de la relance."
+)
+
+add_table(
+    doc,
+    ["Relance", "Mécanisme", "Effet"],
+    [
+        ["Le même jour", "Checkpoint écrit toutes les 5 tables dans incremental/_checkpoints/{date}.json", "Reprise à la table près"],
+        ["Un jour plus tard", "Versions Delta déjà sauvegardées, enregistrées dans incremental/_last_versions.json", "Les tables déjà traitées sont ignorées"],
+    ],
+    col_widths=[3, 7.5, 5.5],
 )
 
 doc.add_paragraph(
     "Sur un environnement volumineux, un premier backup peut donc être étalé délibérément sur "
-    "plusieurs exécutions successives."
+    "plusieurs nuits successives, sans jamais recloner ce qui est déjà sauvegardé."
+)
+
+add_heading(doc, "Forcer une reprise exacte", 3)
+
+doc.add_paragraph(
+    "Le checkpoint est indexé par date. Pour reprendre un run interrompu avec la précision de "
+    "la table, relancer le job en renseignant la date de ce run plutôt que celle du jour, via "
+    "« Run now with different parameters » :"
+)
+
+add_code(doc, "backup_date = 2026-08-06      # la date du run interrompu")
+
+add_note(
+    doc,
+    "laissé vide, ce paramètre vaut la date du jour, ce qui est le comportement normal d'une "
+    "exécution planifiée.",
 )
 
 add_warning(
@@ -857,7 +849,9 @@ add_table(
         ["backup_root", "valeur de databricks.yml", "Racine de stockage du backup"],
         ["retain_daily", "30", "Fenêtre de restauration point-in-time, en jours"],
         ["retain_monthly", "3", "Nombre d'archives mensuelles conservées"],
-        ["max_parallel", "8", "Clones simultanés"],
+        ["max_parallel", "8", "Opérations simultanées : clones et VACUUM"],
+        ["vacuum_dow", "7", "Jour du VACUUM, 7 = dimanche (voir §6.3)"],
+        ["backup_date", "vide", "Vide = date du jour. À renseigner pour reprendre un run interrompu (voir §5.3)"],
         ["dry_run", "false", "Simulation, aucune écriture ni suppression"],
     ],
     col_widths=[4, 3.5, 8.5],
@@ -912,10 +906,60 @@ doc.add_paragraph(
     "Les propriétés de rétention Delta définissent un seuil de sécurité : elles empêchent la "
     "suppression de fichiers encore nécessaires, mais ne suppriment rien d'elles-mêmes. Sans "
     "commande VACUUM, le stockage croît indéfiniment. L'étape 6.5 du notebook de rétention "
-    "exécute donc un VACUUM sur chaque table de incremental/, à chaque run quotidien."
+    "exécute donc un VACUUM sur chaque table de incremental/."
 )
 
 doc.add_paragraph("Le VACUUM est appelé sans clause RETAIN explicite, afin de toujours respecter le seuil configuré et de ne jamais raccourcir la fenêtre de restauration annoncée.")
+
+add_heading(doc, "Fréquence : hebdomadaire, et pourquoi", 3)
+
+doc.add_paragraph(
+    "Le VACUUM doit lister récursivement tous les fichiers de chaque table pour les comparer au "
+    "journal des transactions. Ce coût est payé intégralement même lorsque rien n'est à "
+    "supprimer. Mesure relevée en production avant ajustement :"
+)
+
+add_table(
+    doc,
+    ["Mesure", "Valeur"],
+    [
+        ["Tables traitées", "2 398"],
+        ["Durée de l'étape", "2 h 40, soit plus de la moitié du backup quotidien"],
+        ["Fichiers effectivement supprimés", "0"],
+    ],
+    col_widths=[6, 10],
+)
+
+doc.add_paragraph(
+    "Un VACUUM hebdomadaire purge exactement autant qu'un VACUUM quotidien : il rattrape "
+    "plusieurs jours en une fois. La fréquence est donc réglée sur une exécution par semaine, "
+    "et l'étape est parallélisée sur max_parallel."
+)
+
+add_table(
+    doc,
+    ["Paramètre", "Défaut", "Rôle"],
+    [
+        ["vacuum_dow", "7", "Jour d'exécution : 1 = lundi … 7 = dimanche. 0 = tous les jours"],
+        ["enable_vacuum", "true", "Désactivation complète. Vaut false dans le job mensuel, qui ne doit pas dupliquer le VACUUM du quotidien"],
+    ],
+    col_widths=[4, 2.5, 9.5],
+)
+
+add_warning(
+    doc,
+    "ne pas chercher à restreindre le VACUUM aux seules tables modifiées dans la journée. Un "
+    "fichier devient éligible à la suppression lorsqu'il dépasse le seuil de rétention, pas "
+    "lorsque la table change : une table restée statique depuis 40 jours a des fichiers qui "
+    "franchissent le seuil aujourd'hui sans qu'elle ait bougé. Ils ne seraient alors jamais "
+    "purgés.",
+)
+
+add_note(
+    doc,
+    "les six autres nuits, l'étape affiche « VACUUM ignoré » suivi du jour planifié. C'est le "
+    "comportement attendu, pas une étape manquante.",
+)
 
 add_warning(
     doc,
@@ -979,7 +1023,7 @@ add_table(
         ["4", "Reprise sur interruption", "Stockage, incremental/_checkpoints/", "Un fichier daté du jour, contenant les tables déjà traitées"],
         ["5", "Configuration du workspace", "Journal 00_orchestrator", "Nombre de jobs et de notebooks chargés dans le manifeste, sans avertissement"],
         ["6", "Rétention effectivement posée", "Requête DESCRIBE DETAIL du §6.4", "interval 33 days et interval 32 days"],
-        ["7", "VACUUM exécuté", "Journal 06_retention, étape 6.5", "Une ligne par table ; 0 fichier supprimé est normal avant 30 jours"],
+        ["7", "VACUUM exécuté", "Journal 06_retention, étape 6.5", "Le jour planifié : une ligne par table, 0 fichier supprimé est normal avant 30 jours. Les autres jours : « VACUUM ignoré »"],
         ["8", "Restauration fonctionnelle", "Notebook 07_restore en simulation", "Les commandes de restauration sont affichées, aucune n'est exécutée"],
     ],
     col_widths=[1, 4, 4.5, 6.5],
@@ -1321,6 +1365,6 @@ add_note(
 # ── Écriture ──────────────────────────────────────────────────────────────────
 
 out_dir = os.path.dirname(os.path.abspath(__file__))
-out_path = os.path.join(out_dir, "DR_Backup_Guide_Deploiement_v4.docx")
+out_path = os.path.join(out_dir, "DR_Backup_Guide_Deploiement_v4.1.docx")
 doc.save(out_path)
 print(f"[OK] Guide genere : {out_path}")

@@ -230,11 +230,17 @@ def clone_one(args: tuple) -> dict:
         )
         metrics = result.collect()[0].asDict()
         elapsed = time.time() - t0
-        size_gb = (
-            metrics.get("copied_files_size") or
-            metrics.get("num_output_bytes") or
-            metrics.get("source_table_size") or 0
-        ) / (1024**3)
+        # Octets réellement copiés. Tester `is not None` et non la valeur : avec une chaîne de
+        # `or`, un `copied_files_size` à 0 (clone incrémental n'ayant rien copié) était traité
+        # comme absent et retombait sur `source_table_size`, soit la taille TOTALE de la table.
+        # Le volume rapporté additionnait alors des tailles complètes de tables inchangées et
+        # faisait paraître l'incrémental bien plus coûteux qu'il ne l'est.
+        copied_bytes = 0
+        for _metric in ("copied_files_size", "num_output_bytes", "source_table_size"):
+            if metrics.get(_metric) is not None:
+                copied_bytes = int(metrics[_metric])
+                break
+        size_gb   = copied_bytes / (1024**3)
         num_files = metrics.get("num_copied_files", 0)
         entry = {
             "table":        fqn,
