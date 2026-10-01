@@ -6,6 +6,7 @@
 
 # COMMAND ----------
 import json
+import sys
 from datetime import date
 from pyspark.sql import SparkSession
 
@@ -37,9 +38,21 @@ def _uc_head(path: str) -> str:
 # DBTITLE 1, Paramètres
 dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
+dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")
+lib_path = dbutils.widgets.get("lib_path")
+
+sys.path.insert(0, lib_path)
+# Étape critique du backup : un lib/ pas encore redéployé ne doit pas la faire échouer,
+# seul l'export volumes/fonctions est alors sauté (signalé dans le résultat).
+try:
+    from uc_ddl import build_function_ddl, build_volume_ddl
+    uc_objects_error = None
+except ImportError as e:
+    uc_objects_error = f"lib/uc_ddl.py introuvable dans {lib_path} : {e}"
+    print(f"[WARN] {uc_objects_error} — volumes et fonctions NON sauvegardés")
 
 assert backup_root.startswith("abfss://"), "backup_root doit commencer par abfss://"
 
@@ -106,7 +119,67 @@ _uc_put(f"{output_path}/03_tables.sql", "\n\n".join(table_ddls))
 print(f"[03_tables] {len(table_ddls)} tables exportées")
 
 # COMMAND ----------
-# DBTITLE 1, Export grants (catalogs, schemas, tables)
+# DBTITLE 1, Export volumes + fonctions
+
+# Pas de SHOW CREATE pour ces objets : les DDL sont reconstruits depuis information_schema
+# (une requête par catalog et par vue, pas par schéma).
+# Seules les métadonnées sont sauvegardées : le contenu des volumes MANAGED (fichiers)
+# n'est pas copié ; celui des volumes EXTERNAL reste sur leur stockage d'origine.
+
+def _rows(sql: str) -> list:
+    return [r.asDict() for r in spark.sql(sql).collect()]
+
+volume_ddls, volume_fqns = [], []
+function_ddls, function_fqns = [], []
+
+for catalog in (catalogs if uc_objects_error is None else []):
+    excluded = ", ".join(f"'{s}'" for s in EXCLUDED_SCHEMAS)
+    try:
+        for v in _rows(f"""
+            SELECT * FROM `{catalog}`.information_schema.volumes
+            WHERE volume_schema NOT IN ({excluded})
+            ORDER BY volume_schema, volume_name
+        """):
+            volume_ddls.append(build_volume_ddl(v) + ";")
+            volume_fqns.append(f"`{catalog}`.`{v['volume_schema']}`.`{v['volume_name']}`")
+    except Exception as e:
+        print(f"[WARN] Volumes {catalog}: {e}")
+
+    try:
+        routines = _rows(f"""
+            SELECT * FROM `{catalog}`.information_schema.routines
+            WHERE routine_schema NOT IN ({excluded})
+            ORDER BY routine_schema, routine_name
+        """)
+        params, columns = {}, {}
+        if routines:
+            for p in _rows(f"SELECT * FROM `{catalog}`.information_schema.parameters"):
+                params.setdefault((p["specific_schema"], p["specific_name"]), []).append(p)
+            for c in _rows(f"SELECT * FROM `{catalog}`.information_schema.routine_columns"):
+                columns.setdefault((c["specific_schema"], c["specific_name"]), []).append(c)
+        for r in routines:
+            key = (r["specific_schema"], r["specific_name"])
+            fqn = f"`{catalog}`.`{r['routine_schema']}`.`{r['routine_name']}`"
+            ddl = build_function_ddl(r, params.get(key, []), columns.get(key))
+            if ddl is None:
+                print(f"[WARN] Corps illisible (droits ?), fonction non exportée : {fqn}")
+                continue
+            function_ddls.append(ddl + ";")
+            function_fqns.append(fqn)
+    except Exception as e:
+        print(f"[WARN] Fonctions {catalog}: {e}")
+
+# Fichiers absents (plutôt que vides) si l'export a été sauté : un fichier vide
+# laisserait croire au restore qu'il n'y avait aucun volume ni fonction.
+if uc_objects_error is None:
+    _uc_put(f"{output_path}/05_volumes.sql", "\n\n".join(volume_ddls))
+    print(f"[05_volumes] {len(volume_ddls)} volumes exportés")
+
+    _uc_put(f"{output_path}/06_functions.sql", "\n\n".join(function_ddls))
+    print(f"[06_functions] {len(function_ddls)} fonctions exportées")
+
+# COMMAND ----------
+# DBTITLE 1, Export grants (catalogs, schemas, tables, volumes, fonctions)
 
 grant_statements = []
 
@@ -138,6 +211,15 @@ for catalog in catalogs:
             except Exception as e:
                 print(f"[WARN] Grants table {fqn_plain}: {e}")
 
+# Grants volumes + fonctions
+for securable, fqns in (("VOLUME", volume_fqns), ("FUNCTION", function_fqns)):
+    for fqn in fqns:
+        try:
+            for g in spark.sql(f"SHOW GRANTS ON {securable} {fqn}").collect():
+                grant_statements.append(f"GRANT {g.ActionType} ON {securable} {fqn} TO `{g.Principal}`;")
+        except Exception as e:
+            print(f"[WARN] Grants {securable.lower()} {fqn}: {e}")
+
 _uc_put(f"{output_path}/04_grants.sql", "\n".join(grant_statements))
 print(f"[04_grants] {len(grant_statements)} grants exportés")
 
@@ -148,5 +230,8 @@ result = {
     "catalogs": catalogs,
     "table_names": table_names,
     "grant_count": len(grant_statements),
+    "volume_count": len(volume_ddls),
+    "function_count": len(function_ddls),
+    "uc_objects_error": uc_objects_error,
 }
 dbutils.notebook.exit(json.dumps(result))

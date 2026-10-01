@@ -21,7 +21,7 @@ L'infrastructure de destination (ADLS Gen2 DR avec Private Endpoints, UC Externa
 | Domaine | Assets | Outil |
 |---|---|---|
 | Workspace | Notebooks (.dbc), Jobs (JSON), Clusters (JSON), Cluster Policies, Instance Pools, SQL Warehouses | CI/CD + Databricks CLI / DAB |
-| Unity Catalog | Catalogs, Schemas, Tables (DDL SQL), External Locations, Grants/Permissions | Notebook Databricks |
+| Unity Catalog | Catalogs, Schemas, Tables (DDL SQL), Volumes (définition), Fonctions SQL/Python (DDL), External Locations, Grants/Permissions | Notebook Databricks |
 | Données | Delta tables managed (DEEP CLONE), Delta tables external (copie fichiers) | Notebook Databricks |
 | Secrets | Secret scopes (noms + clés listés — valeurs non exportables par Databricks) | CI/CD + REST API |
 

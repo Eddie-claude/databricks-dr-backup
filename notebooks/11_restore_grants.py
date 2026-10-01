@@ -12,6 +12,8 @@
 # MAGIC | Catalog | `GRANT ... ON CATALOG` |
 # MAGIC | Schema  | `GRANT ... ON SCHEMA` |
 # MAGIC | Table   | `GRANT ... ON TABLE` |
+# MAGIC | Volume  | `GRANT ... ON VOLUME` |
+# MAGIC | Fonction | `GRANT ... ON FUNCTION` |
 # MAGIC
 # MAGIC **Remarques :**
 # MAGIC - Les grants déjà existants sont idempotents (rejouer `GRANT` ne provoque pas d'erreur).
@@ -86,7 +88,7 @@ GRANT_PAT = re.compile(r"^GRANT\s+", re.IGNORECASE)
 
 def extract_catalog_from_statement(stmt: str) -> str:
     """Extrait le nom du catalog depuis un statement GRANT."""
-    m = re.search(r"ON\s+(?:CATALOG|SCHEMA|TABLE)\s+`([^`]+)`", stmt, re.IGNORECASE)
+    m = re.search(r"ON\s+(?:CATALOG|SCHEMA|TABLE|VOLUME|FUNCTION)\s+`([^`]+)`", stmt, re.IGNORECASE)
     return m.group(1).lower() if m else ""
 
 valid_statements = []
@@ -111,9 +113,9 @@ for stmt in all_statements:
 print(f"\n── {len(valid_statements)} grant(s) à restaurer ({skipped_invalid} ignorés par filtre/validation) ──")
 
 # Grouper par niveau pour l'affichage
-by_level = {"CATALOG": [], "SCHEMA": [], "TABLE": []}
+by_level = {"CATALOG": [], "SCHEMA": [], "TABLE": [], "VOLUME": [], "FUNCTION": []}
 for s in valid_statements:
-    m = re.search(r"ON\s+(CATALOG|SCHEMA|TABLE)", s, re.IGNORECASE)
+    m = re.search(r"ON\s+(CATALOG|SCHEMA|TABLE|VOLUME|FUNCTION)", s, re.IGNORECASE)
     level = m.group(1).upper() if m else "OTHER"
     by_level.get(level, by_level["TABLE"]).append(s)
 
@@ -167,7 +169,7 @@ for stmt in valid_statements:
             print(f"               → {err_msg[:120]}")
             skip_count += 1
         # Objet introuvable → warning
-        elif any(kw in err_msg.lower() for kw in ["table", "schema", "catalog", "does not exist", "not found"]):
+        elif any(kw in err_msg.lower() for kw in ["table", "schema", "catalog", "volume", "function", "does not exist", "not found"]):
             print(f"  [WARN-OBJECT] {sql}")
             print(f"             → {err_msg[:120]}")
             skip_count += 1

@@ -10,7 +10,8 @@
 # MAGIC | Scope | Notebook appelé | Ce qui est restauré |
 # MAGIC |-------|----------------|---------------------|
 # MAGIC | `tables` | `07_restore` | Tables Delta (Unity Catalog) |
-# MAGIC | `grants` | `11_restore_grants` | Permissions UC (GRANT sur catalogs, schemas, tables) |
+# MAGIC | `uc_objects` | `12_restore_uc_objects` | Volumes + fonctions UC (définitions) |
+# MAGIC | `grants` | `11_restore_grants` | Permissions UC (GRANT sur catalogs, schemas, tables, volumes, fonctions) |
 # MAGIC | `jobs` | `09_restore_jobs` | Définitions de jobs Databricks |
 # MAGIC | `notebooks` | `08_restore_workspace` | Sources notebooks (.py/.sql/.scala) |
 # MAGIC | `acls` | `08_restore_workspace` | ACLs workspace + ACLs repos Git |
@@ -42,7 +43,7 @@ from datetime import date
 
 dbutils.widgets.text(       "backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
 dbutils.widgets.text(       "backup_date",    "",          "Date du backup (vide = dernier backup)")
-dbutils.widgets.multiselect("restore_scope",  "jobs",      ["tables", "grants", "jobs", "notebooks", "acls"], "Périmètre de restauration")
+dbutils.widgets.multiselect("restore_scope",  "jobs",      ["tables", "uc_objects", "grants", "jobs", "notebooks", "acls"], "Périmètre de restauration")
 dbutils.widgets.dropdown(   "dry_run",        "true",      ["true", "false"], "Dry-run (true = simulation)")
 
 # Paramètres tables (utilisés si scope contient 'tables')
@@ -51,8 +52,8 @@ dbutils.widgets.text(       "restore_point",  "",          "Point de restauratio
 dbutils.widgets.text(       "source_table",   "",          "Table(s) à restaurer (vide = toutes)")
 dbutils.widgets.text(       "target_catalog", "",          "Catalog cible tables (vide = même que source)")
 
-# Paramètres grants (utilisés si scope contient 'grants')
-dbutils.widgets.text(       "catalog_filter", "",          "Catalogs à restaurer pour les grants (vide = tous)")
+# Paramètres grants + uc_objects (utilisés si scope contient 'grants' ou 'uc_objects')
+dbutils.widgets.text(       "catalog_filter", "",          "Catalogs à restaurer pour les grants / volumes / fonctions (vide = tous)")
 
 # Paramètres jobs (utilisés si scope contient 'jobs')
 dbutils.widgets.text(       "job_filter",     "",          "Filtre nom de job (vide = tous)")
@@ -98,7 +99,7 @@ if "tables" in restore_scope:
     print(f"[OK] source_table   = {source_table or '(toutes)'}")
     print(f"[OK] target_catalog = {target_catalog or '(même que source)'}")
 
-if "grants" in restore_scope:
+if restore_scope & {"grants", "uc_objects"}:
     print(f"[OK] catalog_filter = {catalog_filter or '(tous)'}")
 
 if "jobs" in restore_scope:
@@ -160,6 +161,28 @@ if "tables" in restore_scope:
     )
 else:
     print("[SKIP] Tables — non sélectionné dans restore_scope")
+
+# COMMAND ----------
+# MAGIC %md ## Étape 1b — Restauration Volumes + Fonctions UC
+# MAGIC Après les tables (une fonction SQL peut les lire), avant les grants (qui visent ces objets).
+
+# COMMAND ----------
+uc_objects_result = {}
+
+if "uc_objects" in restore_scope:
+    uc_objects_result = run_step(
+        name          = "restore_uc_objects",
+        notebook_path = "./12_restore_uc_objects",
+        params        = {
+            "backup_root":    backup_root,
+            "backup_date":    backup_date,
+            "catalog_filter": catalog_filter,
+            "dry_run":        dry_run,
+        },
+        critical = False,
+    )
+else:
+    print("[SKIP] Volumes + fonctions UC — non sélectionné dans restore_scope")
 
 # COMMAND ----------
 # MAGIC %md ## Étape 2 — Restauration Grants Unity Catalog
@@ -282,6 +305,11 @@ if tables_result:
     t_err = tables_result.get("errors", 0)
     print(f"║  Tables    : {t_ok} restaurées, {t_err} erreurs{'':<33}║")
 
+if uc_objects_result:
+    u_ok  = uc_objects_result.get("ok", 0)
+    u_err = uc_objects_result.get("errors", 0)
+    print(f"║  Vol./Fct. : {u_ok} créés, {u_err} erreurs{'':<34}║")
+
 if grants_result:
     g_ok   = grants_result.get("ok", 0)
     g_skip = grants_result.get("skipped", 0)
@@ -324,6 +352,7 @@ dbutils.notebook.exit(json.dumps({
     "global_status":  global_status,
     "steps":          steps,
     "tables":         tables_result,
+    "uc_objects":     uc_objects_result,
     "grants":         grants_result,
     "jobs":           jobs_result,
     "notebooks":      notebooks_result,

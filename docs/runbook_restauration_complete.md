@@ -26,7 +26,8 @@ Il distingue deux scénarios :
 |----------|--------------------|
 | `10_restore_orchestrator` | **Point d'entrée principal** — orchestre les notebooks ci-dessous via widgets multiselect |
 | `07_restore` | Tables Delta (Unity Catalog) |
-| `11_restore_grants` | Permissions Unity Catalog (GRANT sur catalogs, schemas, tables) |
+| `12_restore_uc_objects` | Volumes + fonctions Unity Catalog (définitions ; volumes managés recréés vides) |
+| `11_restore_grants` | Permissions Unity Catalog (GRANT sur catalogs, schemas, tables, volumes, fonctions) |
 | `09_restore_jobs` | Définitions de jobs Databricks |
 | `08_restore_workspace` | Sources notebooks + ACLs workspace (notebooks/dossiers) + ACLs repos Git |
 
@@ -73,11 +74,13 @@ Retient la date `BACKUP_DATE` (ex: `2026-06-25`).
 ```
 backup/
 └── {BACKUP_DATE}/
-    ├── uc_metadata/              # DDL SQL : catalogs, schemas, tables, grants
+    ├── uc_metadata/              # DDL SQL : catalogs, schemas, tables, volumes, fonctions, grants
     │   ├── 01_catalogs.sql
     │   ├── 02_schemas.sql
     │   ├── 03_tables.sql
-    │   └── 04_grants.sql
+    │   ├── 04_grants.sql
+    │   ├── 05_volumes.sql
+    │   └── 06_functions.sql
     ├── incremental/              # DEEP CLONE journalier des tables (Delta)
     │   └── {catalog}/{schema}/{table}/
     ├── snapshots/
@@ -124,7 +127,20 @@ python scripts/restore_uc.py \
 
 > Les `already exists` sont ignorés automatiquement.
 
-### A.2 — Restaurer les permissions Unity Catalog (si nécessaire)
+### A.2 — Restaurer les volumes et fonctions Unity Catalog (si nécessaire)
+
+Sélectionner `uc_objects` dans `restore_scope` du notebook `10_restore_orchestrator` (avec `tables` et `grants` pour un schéma complet : l'orchestrateur les enchaîne dans l'ordre tables → volumes/fonctions → grants).
+
+| Paramètre | Valeur |
+|-----------|--------|
+| `restore_scope` | `uc_objects` |
+| `catalog_filter` | vide = tous les catalogs, ou `mon_catalog` pour cibler |
+| `dry_run` | `true` d'abord, puis `false` |
+
+> Rejoue `uc_metadata/05_volumes.sql` et `06_functions.sql` (`IF NOT EXISTS` : les objets existants ne sont pas modifiés).
+> Un volume **managé** est recréé **vide** : ses fichiers ne font pas partie du backup. Un volume externe retrouve ses fichiers, restés sur son stockage (l'External Location doit exister).
+
+### A.3 — Restaurer les permissions Unity Catalog (si nécessaire)
 
 #### Option 1 : Notebook
 
@@ -136,7 +152,7 @@ Sélectionner `grants` dans `restore_scope` du notebook `10_restore_orchestrator
 | `catalog_filter` | vide = tous les catalogs, ou `mon_catalog` pour cibler |
 | `dry_run` | `true` d'abord, puis `false` |
 
-> Restaure les GRANT sur catalogs, schemas et tables depuis `uc_metadata/04_grants.sql`.
+> Restaure les GRANT sur catalogs, schemas, tables, volumes et fonctions depuis `uc_metadata/04_grants.sql`.
 
 #### Option 2 : Script CLI
 
@@ -147,7 +163,7 @@ python scripts/restore_uc.py \
     --only-grants
 ```
 
-### A.3 — Restaurer les ACLs workspace (notebooks/dossiers)
+### A.4 — Restaurer les ACLs workspace (notebooks/dossiers)
 
 #### Option 1 : Notebook
 
@@ -222,7 +238,10 @@ Ordre d'exécution automatique :
 1. `01_catalogs.sql` — recrée les catalogs *(critique)*
 2. `02_schemas.sql` — recrée les schemas *(critique)*
 3. `03_tables.sql` — recrée les tables (DDL)
-4. `04_grants.sql` — restaure les permissions
+4. `05_volumes.sql` — recrée les volumes (managés : vides)
+5. `06_functions.sql` — recrée les fonctions
+6. Nouvelle tentative des vues / fonctions en échec (une vue peut appeler une fonction créée après elle)
+7. `04_grants.sql` — restaure les permissions (en dernier : elles visent aussi volumes et fonctions)
 
 ### B.4 — Restaurer les données Delta
 
@@ -338,7 +357,7 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 |--------|-------------|
 | `backup_root` | Pré-rempli avec le chemin ADLS production |
 | `backup_date` | Vide = auto-détection via `latest.json` |
-| `restore_scope` | Multiselect : `tables`, `grants`, `jobs`, `notebooks`, `acls` |
+| `restore_scope` | Multiselect : `tables`, `uc_objects`, `grants`, `jobs`, `notebooks`, `acls` |
 | `dry_run` | `true` (simulation) / `false` (applique) |
 | `restore_level` | Pour les tables : `incremental` / `weekly` / `monthly` |
 | `restore_point` | Pour les tables : timestamp ou label (`2026-W25`) |

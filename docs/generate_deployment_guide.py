@@ -115,7 +115,7 @@ add_table(
     doc,
     ["Périmètre", "Contenu", "Notebook"],
     [
-        ["Métadonnées Unity Catalog", "DDL des catalogs, schémas, tables, vues, volumes ; permissions (GRANT)", "01_uc_metadata"],
+        ["Métadonnées Unity Catalog", "DDL des catalogs, schémas, tables, vues, volumes et fonctions (SQL, Python) ; permissions (GRANT)", "01_uc_metadata"],
         ["Données des tables Delta", "Copie complète par DEEP CLONE, puis incrémentale", "02_data_clone"],
         ["Configuration du workspace", "Définitions de jobs, notebooks sources, ACL, repos Git", "05_workspace_config"],
         ["Rapport et différentiel", "Comparaison avec la veille, rapport HTML", "03_diff, 04_report"],
@@ -130,6 +130,7 @@ bullet(doc, "Les vues matérialisées et les Streaming Tables (non clonables)")
 bullet(doc, "Les secrets et les scopes de secrets Databricks")
 bullet(doc, "Les catalogs système : hive_metastore, system, samples")
 bullet(doc, "Les données hors Unity Catalog (DBFS racine, montages legacy)")
+bullet(doc, "Le contenu (fichiers) des volumes managés : seule leur définition est sauvegardée, ils sont recréés vides. Les fichiers des volumes externes restent sur leur stockage d'origine")
 
 add_note(
     doc,
@@ -468,15 +469,16 @@ add_code(
     doc,
     "databricks.yml            definition des jobs (Asset Bundle)\n"
     "notebooks/                pipeline de backup et de restauration\n"
-    "lib/                      modules partages (diff, rapport, templates)\n"
+    "lib/                      modules partages (DDL volumes/fonctions, diff, rapport, templates)\n"
     "scripts/                  utilitaires de restauration hors Databricks\n"
     "docs/                     guides de deploiement et de restauration",
 )
 
 add_warning(
     doc,
-    "le dossier lib/ est indispensable : les notebooks 03 et 04 en dépendent. Une extraction "
-    "partielle de l'archive provoque un échec de l'étape de rapport.",
+    "le dossier lib/ est indispensable : les notebooks 01, 03, 04 et 12 en dépendent. Une extraction "
+    "partielle de l'archive provoque un échec de l'étape de rapport, et le backup des volumes "
+    "et fonctions est sauté (avertissement dans la sortie de 01_uc_metadata).",
 )
 
 add_heading(doc, "4.2 Adapter databricks.yml", 2)
@@ -1096,8 +1098,9 @@ add_table(
         ["07_restore", "Tables Delta", "Une table, un schéma, un catalog, ou l'intégralité"],
         ["08_restore_workspace", "Notebooks sources, ACL, repos Git", "Sélectif par chemin"],
         ["09_restore_jobs", "Définitions de jobs", "Tous les jobs sauvegardés"],
-        ["10_restore_orchestrator", "Plusieurs périmètres à la fois", "Orchestration de 07, 08, 09 et 11"],
-        ["11_restore_grants", "Permissions Unity Catalog", "Catalog, schéma, table"],
+        ["10_restore_orchestrator", "Plusieurs périmètres à la fois", "Orchestration de 07, 08, 09, 11 et 12"],
+        ["11_restore_grants", "Permissions Unity Catalog", "Catalog, schéma, table, volume, fonction"],
+        ["12_restore_uc_objects", "Volumes et fonctions Unity Catalog", "Tous, ou filtrés par catalog"],
     ],
     col_widths=[4.5, 5, 6.5],
 )
