@@ -134,6 +134,31 @@ doc.add_paragraph(
 add_code(doc, "[WARN] Volumes de db_demo non listables : [INSUFFICIENT_PERMISSIONS] "
               "User does not have USE CATALOG on Catalog 'db_demo'.")
 
+add_heading(doc, "2.4 Permissions héritées exportées comme permissions directes", 2)
+
+doc.add_paragraph(
+    "La commande SHOW GRANTS sur un objet renvoie aussi les droits hérités de son catalog et "
+    "de son schéma. L'export les réécrivait tous comme des droits posés sur l'objet lui-même : "
+    "une restauration les aurait matérialisés en droits explicites, objet par objet. Un droit "
+    "retiré plus tard au niveau du catalog serait alors resté actif sur chaque table. Seuls les "
+    "droits posés sur l'objet lui-même sont désormais exportés ; sur l'environnement de test, "
+    "le fichier des permissions est passé de 308 à 150 lignes."
+)
+
+add_warning(
+    doc,
+    "les fichiers 04_grants.sql produits par les versions précédentes contiennent ces droits "
+    "hérités. Pour une restauration des permissions, utiliser de préférence un backup réalisé "
+    "avec la version 4.2.",
+)
+
+add_heading(doc, "2.5 Fonctions Python", 2)
+
+doc.add_paragraph(
+    "Le corps d'une fonction Python gagnait une ligne vide au début et à la fin à chaque cycle "
+    "de sauvegarde et de restauration. Il est désormais restauré à l'identique."
+)
+
 doc.add_page_break()
 
 
