@@ -133,10 +133,23 @@ print(f"[INFO] max_parallel={max_parallel} | tables={len(table_names)} | resume=
 # COMMAND ----------
 # DBTITLE 1, Checkpoint (lecture + écriture thread-safe)
 
-_checkpoint_lock  = threading.Lock()
-_checkpoint_dirty = threading.Event()
-_checkpoint_count = 0
-CHECKPOINT_EVERY  = 5  # écrire sur ADLS toutes les N tables
+# >>> REGLES CLONE
+def should_flush(pending: int, last_flush: float, now: float, every: int = 50, max_age_s: float = 120) -> bool:
+    """Écrire le checkpoint toutes les 50 tables ou toutes les 2 minutes.
+    Toutes les 5 tables, le JSON complet (de plus en plus gros) était réécrit ~900 fois par run,
+    un job Spark à chaque fois, sur le driver. Après un crash, au pire 50 tables sont refaites :
+    sans conséquence, le DEEP CLONE (CREATE OR REPLACE) est idempotent."""
+    return pending >= every or (pending > 0 and now - last_flush >= max_age_s)
+
+
+def _short(e) -> str:
+    """Message d'erreur sans la stacktrace JVM, borné : il est stocké dans le checkpoint et le manifest."""
+    return " ".join(str(e).split("JVM stacktrace:")[0].split())[:2000]
+# <<< REGLES CLONE
+
+_checkpoint_lock    = threading.Lock()
+_checkpoint_pending = 0
+_checkpoint_last    = time.time()
 
 def load_checkpoint():
     try:
@@ -144,16 +157,53 @@ def load_checkpoint():
     except Exception:
         return {}
 
-def save_checkpoint(done: dict):
-    global _checkpoint_count
-    with _checkpoint_lock:
-        _checkpoint_count += 1
-        if _checkpoint_count % CHECKPOINT_EVERY == 0:
-            _uc_put(checkpoint_path, json.dumps(done, indent=2))
+# Chaque table touchée (DESCRIBE HISTORY + DEEP CLONE) reste dans le cache des logs Delta de la
+# session, avec un RDD d'état persisté jamais libéré. Mesuré sur dev (200 tables) : 1 RDD de plus
+# par table et une mémoire du driver qui croît linéairement (751 → 1 373 Mo) ; en vidant ce cache
+# régulièrement : 0 RDD et une mémoire stable (~500 Mo). Sur ~4 300 tables, la JVM du driver
+# saturait (GC overhead limit exceeded, dans StorageStatus.addBlock). Chaque table n'étant traitée
+# qu'une fois, vider ce cache est sans effet sur le résultat : au pire un clone en cours relit son log.
+RELEASE_EVERY = 50
+_processed    = 0
+_release_off  = False
+_DELTALOG_CLASSES = ("com.databricks.sql.transaction.tahoe.DeltaLog$", "org.apache.spark.sql.delta.DeltaLog$")
 
-def flush_checkpoint(done: dict):
+def release_cached_state() -> None:
+    global _release_off
+    if _release_off:
+        return
+    jvm = spark._jvm
+    for cls in _DELTALOG_CLASSES:
+        try:
+            getattr(jvm.java.lang.Class.forName(cls).getField("MODULE$"), "get")(None).clearCache()
+            return
+        except Exception:
+            continue
+    try:   # repli : libérer au moins les RDD d'état persistés
+        for rdd in spark.sparkContext._jsc.getPersistentRDDs().values():
+            rdd.unpersist(False)   # non bloquant
+    except Exception as e:     # ex. mode d'accès sans SparkContext : désactiver, sans bloquer le backup
+        _release_off = True
+        print(f"[WARN] Libération du cache Delta indisponible : {_short(e)[:200]}")
+
+def save_checkpoint(fqn: str, entry: dict):
+    """Enregistre le résultat d'une table et écrit périodiquement sur ADLS.
+    L'affectation se fait SOUS le verrou : modifiée hors verrou pendant qu'un autre thread
+    sérialise le dict, elle provoquait « dictionary changed size during iteration »."""
+    global _checkpoint_pending, _checkpoint_last, _processed
     with _checkpoint_lock:
-        _uc_put(checkpoint_path, json.dumps(done, indent=2))
+        already_done[fqn] = entry
+        _checkpoint_pending += 1
+        _processed += 1
+        if should_flush(_checkpoint_pending, _checkpoint_last, time.time()):
+            _uc_put(checkpoint_path, json.dumps(already_done))
+            _checkpoint_pending, _checkpoint_last = 0, time.time()
+        if _processed % RELEASE_EVERY == 0:
+            release_cached_state()
+
+def flush_checkpoint():
+    with _checkpoint_lock:
+        _uc_put(checkpoint_path, json.dumps(already_done))
 
 already_done: dict = {}
 if resume_mode:
@@ -164,9 +214,9 @@ if resume_mode:
 # COMMAND ----------
 # DBTITLE 1, Versions Delta connues (skip si source inchangée depuis le dernier clone réussi)
 
-_last_versions_lock  = threading.Lock()
-_last_versions_count = 0
-LAST_VERSIONS_EVERY  = 5  # écrire sur ADLS toutes les N tables (même cadence que le checkpoint)
+_last_versions_lock    = threading.Lock()
+_last_versions_pending = 0
+_last_versions_last    = time.time()
 
 def load_last_versions() -> dict:
     try:
@@ -178,7 +228,7 @@ def load_last_versions() -> dict:
 def _write_last_versions(versions: dict) -> None:
     """Écriture ADLS. L'appelant doit déjà détenir _last_versions_lock
     (threading.Lock n'est pas réentrant)."""
-    _uc_put(last_versions_path, json.dumps(versions, indent=2))
+    _uc_put(last_versions_path, json.dumps(versions))
 
 def record_last_version(fqn: str, version) -> None:
     """Mémorise la version source clonée et écrit périodiquement sur ADLS.
@@ -190,12 +240,13 @@ def record_last_version(fqn: str, version) -> None:
     lendemain, puisque l'écriture finale n'est jamais atteinte. Le run suivant
     reclonerait alors l'intégralité du périmètre.
     """
-    global _last_versions_count
+    global _last_versions_pending, _last_versions_last
     with _last_versions_lock:
         new_last_versions[fqn] = version
-        _last_versions_count += 1
-        if _last_versions_count % LAST_VERSIONS_EVERY == 0:
+        _last_versions_pending += 1
+        if should_flush(_last_versions_pending, _last_versions_last, time.time()):
             _write_last_versions(new_last_versions)
+            _last_versions_pending, _last_versions_last = 0, time.time()
 
 def flush_last_versions() -> None:
     """Écriture finale — garantit que les tables du dernier lot incomplet sont retenues."""
@@ -209,7 +260,7 @@ def get_source_version(catalog: str, schema: str, table: str):
         row = spark.sql(f"DESCRIBE HISTORY `{catalog}`.`{schema}`.`{table}` LIMIT 1").collect()[0]
         return row["version"]
     except Exception as e:
-        print(f"  [WARN] get_source_version({catalog}.{schema}.{table}) a échoué : {e}")
+        print(f"  [WARN] get_source_version({catalog}.{schema}.{table}) a échoué : {_short(e)[:300]}")
         return None
 
 last_versions     = load_last_versions()
@@ -253,8 +304,7 @@ def clone_one(args: tuple) -> dict:
             "source_version":    source_version,
         }
         print(f"[{ts}] ({idx}/{pending_total}) → {fqn} — [SKIP] version Delta inchangée ({source_version})")
-        already_done[fqn] = entry
-        save_checkpoint(already_done)
+        save_checkpoint(fqn, entry)
         record_last_version(fqn, source_version)
         return entry
 
@@ -301,14 +351,14 @@ def clone_one(args: tuple) -> dict:
               )
             """)
         except Exception as _e:
-            print(f"  [WARN] Propriétés Delta non définies sur {dest}: {_e}")
+            print(f"  [WARN] Propriétés Delta non définies sur {dest}: {_short(_e)[:300]}")
 
         if source_version is not None:
             record_last_version(fqn, source_version)
 
     except Exception as e:
         elapsed = time.time() - t0
-        err_str = str(e)
+        err_str = _short(e)
         if "DELTA_CLONE_UNSUPPORTED_SOURCE" in err_str or "format is View" in err_str:
             entry = {
                 "table":      fqn,
@@ -324,19 +374,19 @@ def clone_one(args: tuple) -> dict:
                 "error":      err_str,
                 "duration_s": round(elapsed, 1),
             }
-            print(f"  ✗ ERREUR {fqn} — {e}")
+            print(f"  ✗ ERREUR {fqn} — {err_str[:500]}")
 
-    # Mise à jour checkpoint thread-safe
-    already_done[fqn] = entry
-    save_checkpoint(already_done)
+    save_checkpoint(fqn, entry)
     return entry
 
 args_list = [(i + 1, fqn) for i, fqn in enumerate(pending_tables)]
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor:
-    new_results = list(executor.map(clone_one, args_list))
+    # Consommer l'itérateur fait remonter ici l'exception d'un thread (sinon avalée en silence)
+    for _ in executor.map(clone_one, args_list):
+        pass
 
-flush_checkpoint(already_done)  # garantit l'écriture finale
+flush_checkpoint()  # garantit l'écriture finale
 flush_last_versions()
 
 # Résultats complets (checkpoint précédent + nouveau run)
@@ -346,7 +396,7 @@ total_size_gb = sum(r.get("size_gb", 0) for r in clone_results)
 # COMMAND ----------
 # DBTITLE 1, Manifest final
 
-_uc_put(clone_manifest_path, json.dumps(clone_results, indent=2))
+_uc_put(clone_manifest_path, json.dumps(clone_results))
 
 success_count  = len([r for r in clone_results if r["status"] == "success"])
 skip_count     = len([r for r in clone_results if r["status"] == "skipped"])
@@ -372,8 +422,9 @@ if error_count > 0:
             print(f"  - {r['table']}: {r.get('error', '?')[:120]}")
 
 # COMMAND ----------
+# Sans la liste complète des résultats (~4 300 entrées) : l'orchestrateur ne lit que
+# total_size_gb, et le détail est dans le manifest écrit ci-dessus.
 dbutils.notebook.exit(json.dumps({
-    "clone_results":      clone_results,
     "total_size_gb":      round(total_size_gb, 3),
     "success_count":      success_count,
     "skip_count":         skip_count,
