@@ -80,7 +80,10 @@ add_table(
         ["Catalogs fédérés et Delta Sharing exclus automatiquement du backup", "§1.2"],
         ["Mesure du contenu des volumes managés et des catalogs inaccessibles dans l'audit", "§3.1"],
         ["Rapport de couverture : ce qui est restaurable, et par quel moyen", "§3.4"],
-        ["Driver à mémoire renforcée (Standard_E8s_v3) sur le job quotidien", "§5.1"],
+        ["Correction de la saturation mémoire du driver ; driver Standard_E8s_v3", "§5.1"],
+        ["Export de tout le workspace (notebooks, fichiers), des pipelines et des permissions des jobs", "§1.1, §9"],
+        ["Sauvegarde des fichiers des volumes managés, restauration à une date donnée", "§1.1, §9"],
+        ["Synchronisation automatique des droits du compte de backup (job dr-backup-grants-sync)", "§2.5"],
         ["Ordre de restauration avec l'infrastructure as code ; rejeu des seules permissions", "§9.2"],
         ["Messages d'erreur sans trace Java, qui tronquaient la sortie des notebooks", "—"],
     ],
@@ -116,7 +119,8 @@ add_table(
     [
         ["Métadonnées Unity Catalog", "DDL des catalogs, schémas, tables, vues, volumes et fonctions (SQL, Python) ; permissions (GRANT)", "01_uc_metadata"],
         ["Données des tables Delta", "Copie complète par DEEP CLONE, puis incrémentale", "02_data_clone"],
-        ["Configuration du workspace", "Définitions de jobs, notebooks sources, ACL, repos Git", "05_workspace_config"],
+        ["Fichiers des volumes managés", "Copie incrémentale, restauration à une date donnée", "14_volume_files"],
+        ["Configuration du workspace", "Notebooks et fichiers de tout le workspace (/Repos exclu), définitions et permissions des jobs, pipelines, ACL, repos Git", "05_workspace_config"],
         ["Rapport et différentiel", "Comparaison avec la veille, rapport HTML", "03_diff, 04_report"],
     ],
     col_widths=[4.5, 8.5, 3.5],
@@ -131,7 +135,7 @@ bullet(doc, "Les catalogs système : hive_metastore, system, samples")
 bullet(doc, "Les catalogs fédérés (Lakehouse Federation) et Delta Sharing : leurs données restent dans la "
             "source ou chez le fournisseur, leur définition (connexion, partage) est à gérer en IaC")
 bullet(doc, "Les données hors Unity Catalog (DBFS racine, montages legacy)")
-bullet(doc, "Le contenu (fichiers) des volumes managés : seule leur définition est sauvegardée, ils sont recréés vides. Les fichiers des volumes externes restent sur leur stockage d'origine")
+bullet(doc, "Les fichiers des volumes externes : ils restent sur leur stockage d'origine, dont la protection relève de sa configuration Azure")
 
 add_note(
     doc,
@@ -287,6 +291,15 @@ add_note(
     "répéter le second GRANT pour chaque catalog à sauvegarder. Un catalog auquel le "
     "principal n'a pas accès est simplement absent du backup, sans erreur bloquante — d'où "
     "l'importance de la vérification du §7.",
+)
+
+doc.add_paragraph(
+    "Les droits accordés sur un catalog couvrent tout son contenu, y compris les objets créés plus "
+    "tard. Pour qu'un nouveau catalog ne soit pas oublié, le job dr-backup-grants-sync compare "
+    "chaque jour les droits du compte de backup à ceux requis (variables backup_principal, "
+    "backup_location, grants_sync_mode du bundle) : en mode report il échoue et notifie en cas "
+    "d'écart, en mode apply il accorde les droits manquants. Il s'exécute avec l'identité qui "
+    "déploie le bundle, qui doit être admin du metastore."
 )
 
 add_heading(doc, "2.6 Créer le Service Principal", 2)
@@ -813,7 +826,9 @@ doc.add_paragraph(
     "Le driver est dimensionné à part : Standard_E8s_v3 (64 Go). Sa mémoire croît avec le nombre "
     "de tables traitées dans un même run, pas avec leur volume : sur un Standard_DS4_v2, elle "
     "saturait vers 4 000 tables (erreur GC overhead limit exceeded), et seule une seconde "
-    "tentative aboutissait. Les workers restent en Standard_DS4_v2."
+    "tentative aboutissait. La cause (un état Delta mis en cache par table, jamais libéré) est "
+    "corrigée dans le notebook de copie ; le driver E8s_v3 reste une marge de sécurité. Les "
+    "workers restent en Standard_DS4_v2."
 )
 
 add_heading(doc, "5.2 Durées attendues", 2)
@@ -1141,11 +1156,13 @@ add_table(
     ["Notebook", "Restaure", "Portée"],
     [
         ["07_restore", "Tables Delta", "Une table, un schéma, un catalog, ou l'intégralité"],
-        ["08_restore_workspace", "Notebooks sources, ACL, repos Git", "Sélectif par chemin"],
+        ["08_restore_workspace", "Notebooks, fichiers et dashboards, ACL, repos Git", "Sélectif par chemin"],
         ["09_restore_jobs", "Définitions de jobs", "Tous les jobs sauvegardés"],
-        ["10_restore_orchestrator", "Plusieurs périmètres à la fois", "Orchestration de 07, 08, 09, 11 et 12"],
+        ["10_restore_orchestrator", "Plusieurs périmètres à la fois", "Orchestration de 07, 08, 09, 11, 12, 13 et 15"],
         ["11_restore_grants", "Permissions Unity Catalog", "Catalog, schéma, table, volume, fonction"],
         ["12_restore_uc_objects", "Volumes et fonctions Unity Catalog", "Tous, ou filtrés par catalog"],
+        ["13_restore_pipelines", "Pipelines (définition, permissions)", "Tous, ou filtrés par nom ; après les notebooks"],
+        ["15_restore_volume_files", "Fichiers des volumes managés", "Un volume ou tous, à une date donnée ; après 12"],
     ],
     col_widths=[4.5, 5, 6.5],
 )

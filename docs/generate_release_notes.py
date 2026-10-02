@@ -38,9 +38,10 @@ add_title_page(
 add_heading(doc, "1. En résumé", 1)
 
 doc.add_paragraph(
-    "Cette version élargit le périmètre sauvegardé aux volumes et aux fonctions Unity Catalog, "
-    "corrige l'échec quotidien du premier run du backup et ajoute un rapport qui indique, objet "
-    "par objet, ce qui est restaurable et par quel moyen."
+    "Cette version élargit le périmètre sauvegardé aux volumes et fonctions Unity Catalog, à "
+    "l'ensemble du workspace (tous les dossiers, notebooks et fichiers) et aux pipelines ; elle "
+    "corrige la cause de l'échec quotidien du premier run du backup et ajoute un rapport qui "
+    "indique, objet par objet, ce qui est restaurable et par quel moyen."
 )
 
 add_note(
@@ -66,6 +67,12 @@ add_table(
          "Les avertissements n'affichent plus que le message utile (§2.3)"],
         ["Un nouveau périmètre uc_objects dans l'orchestrateur de restauration",
          "Restauration des volumes et fonctions (§3.2)"],
+        ["Les notebooks de tous les dossiers (/Users, dossiers projet) sont sauvegardés, avec les fichiers",
+         "Export complet du workspace (§3.4) ; /Repos reste exclu, son contenu est dans Git"],
+        ["Un dossier workspace/ et un dossier pipelines/ dans chaque backup daté",
+         "Nouveau format d'export et sauvegarde des pipelines (§3.4, §3.5)"],
+        ["L'étape workspace_config peut durer plus longtemps",
+         "Elle parcourt désormais tout le workspace ; les appels sont parallélisés"],
     ],
     col_widths=[6.5, 9.5],
 )
@@ -105,11 +112,26 @@ add_table(
     col_widths=[3.5, 6, 6.5],
 )
 
+doc.add_paragraph(
+    "La cause a été identifiée et corrigée dans le notebook de copie : chaque table traitée "
+    "laissait dans la session un état Delta mis en cache, jamais libéré. Ce cache est désormais "
+    "vidé toutes les 50 tables, sans effet sur le résultat de la copie. Mesure sur 200 tables :"
+)
+
+add_table(
+    doc,
+    ["200 tables traitées", "Avant", "Après"],
+    [
+        ["États Delta restés en cache", "200 (un par table)", "0"],
+        ["Mémoire du driver", "en hausse continue (+620 Mo)", "stable (~500 Mo)"],
+    ],
+    col_widths=[6, 5, 5],
+)
+
 add_note(
     doc,
-    "ce dimensionnement est un ajustement de capacité. Une optimisation du notebook de copie, "
-    "pour que la mémoire du driver ne dépende plus du nombre de tables, est prévue dans une "
-    "version ultérieure.",
+    "le driver Standard_E8s_v3 reste recommandé comme marge de sécurité : la correction supprime "
+    "la croissance, la mémoire supplémentaire absorbe les pics.",
 )
 
 add_heading(doc, "2.2 Catalogs fédérés et Delta Sharing", 2)
@@ -152,7 +174,16 @@ add_warning(
     "avec la version 4.2.",
 )
 
-add_heading(doc, "2.5 Fonctions Python", 2)
+add_heading(doc, "2.5 Robustesse de la copie des tables", 2)
+
+bullet(doc, "Le point de reprise est écrit toutes les 50 tables ou toutes les 2 minutes, au lieu de "
+            "toutes les 5 tables : environ 900 écritures de moins par run. Après une interruption, au "
+            "plus 50 tables sont recopiées, sans conséquence (la copie est idempotente).")
+bullet(doc, "Un accès concurrent entre threads au suivi de progression pouvait interrompre le run "
+            "(« dictionary changed size during iteration ») ; il est protégé.")
+bullet(doc, "Les messages d'erreur stockés dans le suivi et le manifest sont bornés, sans trace Java.")
+
+add_heading(doc, "2.6 Fonctions Python", 2)
 
 doc.add_paragraph(
     "Le corps d'une fonction Python gagnait une ligne vide au début et à la fin à chaque cycle "
@@ -173,16 +204,24 @@ add_table(
     ["Objet", "Sauvegardé", "Restauré par"],
     [
         ["Volumes (managés et externes)", "Définition + permissions", "12_restore_uc_objects (scope uc_objects)"],
+        ["Fichiers des volumes managés", "Copie incrémentale + index quotidien", "15_restore_volume_files (scope volume_files)"],
         ["Fonctions SQL, Python, fonctions table", "DDL complet + permissions", "12_restore_uc_objects (scope uc_objects)"],
     ],
     col_widths=[5, 5, 6],
 )
 
+doc.add_paragraph(
+    "Le contenu des volumes managés est sauvegardé par la nouvelle étape 14_volume_files : seuls "
+    "les fichiers nouveaux ou modifiés sont copiés chaque jour, et un index conserve l'état complet "
+    "de chaque volume jour par jour. 15_restore_volume_files (scope volume_files) restaure un "
+    "volume dans l'état d'une date donnée, sur la rétention quotidienne, plus un état par mois."
+)
+
 add_warning(
     doc,
-    "le contenu des volumes managés (fichiers) n'est pas sauvegardé : un volume managé est "
-    "recréé vide. Les fichiers des volumes externes restent sur leur compte de stockage, dont la "
-    "protection (soft delete, versioning, réplication) relève de sa configuration Azure.",
+    "les fichiers des volumes externes ne sont pas copiés : ils restent sur leur compte de "
+    "stockage, dont la protection (soft delete, versioning, réplication) relève de sa "
+    "configuration Azure.",
 )
 
 add_heading(doc, "3.2 Restauration", 2)
@@ -199,6 +238,70 @@ bullet(doc, "diag_01_audit mesure le contenu des volumes managés (fichiers, tai
 bullet(doc, "Nouveau diag_03_backup_coverage : rapport HTML + Excel de tous les objets du metastore "
             "et du workspace, avec pour chacun le moyen de restauration (backup, as code, autre) "
             "ou son absence, les droits du compte de backup et le résultat du dernier backup.")
+
+add_heading(doc, "3.4 Export complet du workspace", 2)
+
+doc.add_paragraph(
+    "Seuls les notebooks de /Shared, sur quatre niveaux de dossiers, étaient sauvegardés. Le "
+    "workspace entier l'est désormais, sans limite de profondeur : notebooks dans leur format "
+    "de stockage (source, ou .ipynb si le workspace stocke les notebooks en Jupyter), fichiers (.sh, .yml, .whl…) et dashboards. "
+    "Le contenu est écrit par lots dans workspace/objects/, accompagné d'un inventaire "
+    "(workspace/manifest.json). La restauration recrée chaque objet avec son type d'origine."
+)
+
+add_table(
+    doc,
+    ["Paramètre (05_workspace_config)", "Défaut", "Rôle"],
+    [
+        ["workspace_paths", "/", "Dossiers exportés"],
+        ["exclude_paths", "/Repos", "Dossiers exclus ; le contenu des repos Git est dans Git"],
+        ["export_pipelines", "true", "Sauvegarde des pipelines"],
+        ["max_parallel", "16", "Appels API simultanés"],
+    ],
+    col_widths=[5, 2.5, 8.5],
+)
+
+add_warning(
+    doc,
+    "pour lire les dossiers personnels (/Users), l'identité du job doit être administrateur du "
+    "workspace. Les dossiers qu'elle ne peut pas lire sont listés dans la sortie de l'étape "
+    "workspace_config et ne sont pas sauvegardés.",
+)
+
+add_heading(doc, "3.5 Pipelines", 2)
+
+doc.add_paragraph(
+    "La définition complète de chaque pipeline et ses permissions sont sauvegardées dans "
+    "pipelines/pipelines_all.json. Le nouveau notebook 13_restore_pipelines (scope pipelines de "
+    "l'orchestrateur, exécuté après les notebooks) les recrée ; les pipelines déployés par un "
+    "bundle sont ignorés par défaut et se redéploient avec le bundle."
+)
+
+add_note(
+    doc,
+    "les tables produites par un pipeline (vues matérialisées, streaming tables) ne sont pas "
+    "copiées : elles sont recalculées par le pipeline, dont les sources doivent avoir conservé "
+    "assez d'historique. Un pipeline continu démarre dès sa recréation.",
+)
+
+add_heading(doc, "3.6 Synchronisation des droits du compte de backup", 2)
+
+doc.add_paragraph(
+    "Le nouveau job dr-backup-grants-sync (en pause par défaut, à 00:30 UTC) compare chaque jour "
+    "les droits du compte de backup à ceux requis, catalog par catalog, et sur l'External "
+    "Location du backup. Les droits accordés sur un catalog couvrant tout son contenu futur, il "
+    "rattrape surtout les nouveaux catalogs. En mode report (défaut), il échoue et notifie en cas "
+    "d'écart ; en mode apply, il accorde les droits manquants. Il s'exécute avec l'identité qui "
+    "déploie le bundle, qui doit être admin du metastore."
+)
+
+add_heading(doc, "3.7 Permissions des jobs", 2)
+
+doc.add_paragraph(
+    "Les permissions de chaque job sont sauvegardées (jobs/jobs_permissions.json) et réappliquées "
+    "par 09_restore_jobs à la recréation du job. La propriété du job revient à l'identité qui "
+    "restaure ; un transfert de propriété reste manuel."
+)
 
 doc.add_page_break()
 

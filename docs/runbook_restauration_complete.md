@@ -26,10 +26,12 @@ Il distingue deux scénarios :
 |----------|--------------------|
 | `10_restore_orchestrator` | **Point d'entrée principal** — orchestre les notebooks ci-dessous via widgets multiselect |
 | `07_restore` | Tables Delta (Unity Catalog) |
-| `12_restore_uc_objects` | Volumes + fonctions Unity Catalog (définitions ; volumes managés recréés vides) |
+| `12_restore_uc_objects` | Volumes + fonctions Unity Catalog (définitions) |
+| `15_restore_volume_files` | Fichiers des volumes managés, état à une date donnée (après `12`) |
 | `11_restore_grants` | Permissions Unity Catalog (GRANT sur catalogs, schemas, tables, volumes, fonctions) |
-| `09_restore_jobs` | Définitions de jobs Databricks |
-| `08_restore_workspace` | Sources notebooks + ACLs workspace (notebooks/dossiers) + ACLs repos Git |
+| `09_restore_jobs` | Définitions de jobs Databricks + leurs permissions (backups v4.2+) |
+| `13_restore_pipelines` | Pipelines Lakeflow / DLT : définition + permissions (après les notebooks) |
+| `08_restore_workspace` | Notebooks, fichiers et dashboards de tout le workspace + ACLs workspace + ACLs repos Git |
 
 > ⚠️ **`grants` ≠ `acls`** : les grants Unity Catalog (`GRANT SELECT ON CATALOG …`) sont distincts des ACLs workspace Databricks (permissions sur les notebooks et dossiers). Ils sont sauvegardés dans des fichiers séparés et restaurés par des notebooks différents.
 
@@ -155,7 +157,7 @@ Sélectionner `uc_objects` dans `restore_scope` du notebook `10_restore_orchestr
 | `dry_run` | `true` d'abord, puis `false` |
 
 > Rejoue `uc_metadata/05_volumes.sql` et `06_functions.sql` (`IF NOT EXISTS` : les objets existants ne sont pas modifiés).
-> Un volume **managé** est recréé **vide** : ses fichiers ne font pas partie du backup. Un volume externe retrouve ses fichiers, restés sur son stockage (l'External Location doit exister).
+> Un volume **managé** est recréé vide : ses fichiers se restaurent ensuite avec le scope `volume_files` (`15_restore_volume_files`, état à `restore_point` ou dernier). Un volume externe retrouve ses fichiers, restés sur son stockage (l'External Location doit exister).
 
 ### A.3 — Restaurer les permissions Unity Catalog (si nécessaire)
 
@@ -255,7 +257,7 @@ Ordre d'exécution automatique :
 1. `01_catalogs.sql` — recrée les catalogs *(critique)*
 2. `02_schemas.sql` — recrée les schemas *(critique)*
 3. `03_tables.sql` — recrée les tables (DDL)
-4. `05_volumes.sql` — recrée les volumes (managés : vides)
+4. `05_volumes.sql` — recrée les volumes (contenu des volumes managés : `15_restore_volume_files`)
 5. `06_functions.sql` — recrée les fonctions
 6. Nouvelle tentative des vues / fonctions en échec (une vue peut appeler une fonction créée après elle)
 7. `04_grants.sql` — restaure les permissions (en dernier : elles visent aussi volumes et fonctions)
@@ -374,7 +376,7 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 |--------|-------------|
 | `backup_root` | Pré-rempli avec le chemin ADLS production |
 | `backup_date` | Vide = auto-détection via `latest.json` |
-| `restore_scope` | Multiselect : `tables`, `uc_objects`, `grants`, `jobs`, `notebooks`, `acls` |
+| `restore_scope` | Multiselect : `tables`, `uc_objects`, `grants`, `jobs`, `notebooks`, `pipelines`, `acls` |
 | `dry_run` | `true` (simulation) / `false` (applique) |
 | `restore_level` | Pour les tables : `incremental` / `weekly` / `monthly` |
 | `restore_point` | Pour les tables : timestamp ou label (`2026-W25`) |
@@ -422,8 +424,8 @@ databricks workspace ls /Shared
 | **Delta Sharing** | Reconfigurer les partages avec les destinataires ; catalogs Delta Sharing à recréer depuis le partage |
 | **Catalogs fédérés** | Recréer la connexion et le catalog (IaC) : données dans la base source, non sauvegardées |
 | **External locations / storage credentials / connexions** | Non sauvegardés par le script : à recréer par l'IaC |
-| **Volumes managés** | Définition restaurée (`uc_objects`), **fichiers non sauvegardés** : volume recréé vide |
-| **Pipelines (Lakeflow / DLT)** | Non sauvegardés (chantier en cours) : recréer via IaC / bundle, puis full refresh |
+| **Volumes managés** | Définition (`uc_objects`) puis fichiers (`volume_files`, point-in-time) |
+| **Pipelines (Lakeflow / DLT)** | Définition et permissions restaurées par `13_restore_pipelines` (bundle : redéployer) ; tables recalculées par full refresh |
 | **Modèles MLflow (Unity Catalog)** | Non sauvegardés : ni définition ni versions |
 | **MLflow** | Reconfigurer les experiments si nécessaire |
 | **Service Principals** | Reconfigurer dans Azure Entra ID |
