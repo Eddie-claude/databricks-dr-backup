@@ -44,6 +44,14 @@ output_json           = dbutils.widgets.get("output_json").lower() == "true"
 EXCLUDED_CATALOGS = {"hive_metastore", "system", "samples", "__databricks_internal"}
 EXCLUDED_SCHEMAS  = {"information_schema"}
 
+# Catalogs visibles mais non lisibles par l'identité courante (USE CATALOG manquant…)
+inaccessible_catalogs = set()
+
+def _short(e) -> str:
+    """Première ligne de l'erreur : les exceptions Spark embarquent une stacktrace JVM de
+    centaines de lignes qui fait dépasser la limite de sortie du notebook (sortie tronquée)."""
+    return " ".join(str(e).split("JVM stacktrace:")[0].split())[:300]
+
 print(f"[OK] max_parallel={max_parallel} | seuil OPTIMIZE={optimize_files_per_gb} fichiers/GB (min {optimize_files_min} fichiers)")
 print(f"[OK] Démarré à {datetime.now().strftime('%H:%M:%S')}")
 
@@ -65,7 +73,8 @@ for cat in catalogs:
             if r.databaseName not in EXCLUDED_SCHEMAS
         ]
     except Exception as e:
-        print(f"[WARN] Impossible de lister les schemas de {cat}: {e}")
+        inaccessible_catalogs.add(cat)
+        print(f"[WARN] Impossible de lister les schemas de {cat}: {_short(e)}")
         continue
 
     for sch in schemas:
@@ -82,7 +91,8 @@ for cat in catalogs:
                 rows = spark.sql(f"SHOW TABLES IN `{cat}`.`{sch}`").collect()
                 table_fqns += [(cat, sch, r.tableName, "UNKNOWN") for r in rows]
             except Exception as e2:
-                print(f"[WARN] {cat}.{sch}: {e2}")
+                inaccessible_catalogs.add(cat)
+                print(f"[WARN] {cat}.{sch}: {_short(e2)}")
 
 print(f"[OK] {len(table_fqns)} tables découvertes")
 
@@ -312,7 +322,8 @@ if measure_volumes:
                 else:
                     external_volumes.append(f"{cat}.{r.volume_schema}.{r.volume_name}")
         except Exception as e:
-            print(f"[WARN] Volumes de {cat} non listables : {e}")
+            inaccessible_catalogs.add(cat)
+            print(f"[WARN] Volumes de {cat} non listables : {_short(e)}")
 
     print(f"[INFO] {len(managed)} volume(s) managé(s), {len(external_volumes)} externe(s) — listing avec {max_parallel} threads...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as ex:
@@ -353,5 +364,19 @@ if measure_volumes:
         print(json.dumps(volume_results, indent=2))
 else:
     print("[INFO] Mesure des volumes désactivée (measure_volumes=false)")
+
+# COMMAND ----------
+# MAGIC %md ## 6 — Catalogs inaccessibles
+
+# COMMAND ----------
+# Ces catalogs n'ont été ni audités ni mesurés. Lancé avec l'identité du job de backup,
+# cela signifie qu'ils ne seraient pas non plus sauvegardés.
+if inaccessible_catalogs:
+    print(f"[WARN] {len(inaccessible_catalogs)} catalog(s) inaccessible(s) pour l'identité courante "
+          f"(droit USE CATALOG / USE SCHEMA manquant) :")
+    for c in sorted(inaccessible_catalogs):
+        print(f"  - {c}")
+else:
+    print("[OK] Tous les catalogs ont pu être lus")
 
 print(f"[OK] Terminé à {datetime.now().strftime('%H:%M:%S')}")

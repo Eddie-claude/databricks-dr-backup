@@ -34,6 +34,11 @@ def _uc_head(path: str) -> str:
     # "Bytes read: 0 B") — dbutils.fs.head est plus fiable ici.
     return dbutils.fs.head(path, 10_000_000)
 
+def _short(e) -> str:
+    """Première ligne de l'erreur : les exceptions Spark embarquent une stacktrace JVM de
+    centaines de lignes qui fait dépasser la limite de sortie du notebook (sortie tronquée)."""
+    return " ".join(str(e).split("JVM stacktrace:")[0].split())[:300]
+
 # COMMAND ----------
 # DBTITLE 1, Paramètres
 dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
@@ -95,7 +100,7 @@ for catalog in catalogs:
                 """).collect()
             }
         except Exception as e:
-            print(f"[WARN] Fallback table_type pour {catalog}.{schema}: {e}")
+            print(f"[WARN] Fallback table_type pour {catalog}.{schema}: {_short(e)}")
             cloneable_tables = None  # inclure tout, les vues seront filtrées dans 02_data_clone
 
         tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
@@ -110,7 +115,7 @@ for catalog in catalogs:
                 else:
                     print(f"[SKIP] Vue ignorée pour le clone : {catalog}.{schema}.{t.tableName}")
             except Exception as e:
-                print(f"[WARN] Impossible d'exporter {fqn}: {e}")
+                print(f"[WARN] Impossible d'exporter {fqn}: {_short(e)}")
 
 _uc_put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls))
 print(f"[02_schemas] {len(schema_ddls)} schemas exportés")
@@ -143,7 +148,7 @@ for catalog in (catalogs if uc_objects_error is None else []):
             volume_ddls.append(build_volume_ddl(v) + ";")
             volume_fqns.append(f"`{catalog}`.`{v['volume_schema']}`.`{v['volume_name']}`")
     except Exception as e:
-        print(f"[WARN] Volumes {catalog}: {e}")
+        print(f"[WARN] Volumes {catalog}: {_short(e)}")
 
     try:
         routines = _rows(f"""
@@ -167,7 +172,7 @@ for catalog in (catalogs if uc_objects_error is None else []):
             function_ddls.append(ddl + ";")
             function_fqns.append(fqn)
     except Exception as e:
-        print(f"[WARN] Fonctions {catalog}: {e}")
+        print(f"[WARN] Fonctions {catalog}: {_short(e)}")
 
 # Fichiers absents (plutôt que vides) si l'export a été sauté : un fichier vide
 # laisserait croire au restore qu'il n'y avait aucun volume ni fonction.
@@ -189,7 +194,7 @@ for catalog in catalogs:
         for g in spark.sql(f"SHOW GRANTS ON CATALOG `{catalog}`").collect():
             grant_statements.append(f"GRANT {g.ActionType} ON CATALOG `{catalog}` TO `{g.Principal}`;")
     except Exception as e:
-        print(f"[WARN] Grants catalog {catalog}: {e}")
+        print(f"[WARN] Grants catalog {catalog}: {_short(e)}")
 
     schemas = [ddl.split("`")[3] for ddl in schema_ddls if ddl.startswith(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`")]
     for schema in schemas:
@@ -198,7 +203,7 @@ for catalog in catalogs:
             for g in spark.sql(f"SHOW GRANTS ON SCHEMA `{catalog}`.`{schema}`").collect():
                 grant_statements.append(f"GRANT {g.ActionType} ON SCHEMA `{catalog}`.`{schema}` TO `{g.Principal}`;")
         except Exception as e:
-            print(f"[WARN] Grants schema {catalog}.{schema}: {e}")
+            print(f"[WARN] Grants schema {catalog}.{schema}: {_short(e)}")
 
         # Grants tables
         tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
@@ -209,7 +214,7 @@ for catalog in catalogs:
                 for g in spark.sql(f"SHOW GRANTS ON TABLE {fqn}").collect():
                     grant_statements.append(f"GRANT {g.ActionType} ON TABLE {fqn} TO `{g.Principal}`;")
             except Exception as e:
-                print(f"[WARN] Grants table {fqn_plain}: {e}")
+                print(f"[WARN] Grants table {fqn_plain}: {_short(e)}")
 
 # Grants volumes + fonctions
 for securable, fqns in (("VOLUME", volume_fqns), ("FUNCTION", function_fqns)):
@@ -218,7 +223,7 @@ for securable, fqns in (("VOLUME", volume_fqns), ("FUNCTION", function_fqns)):
             for g in spark.sql(f"SHOW GRANTS ON {securable} {fqn}").collect():
                 grant_statements.append(f"GRANT {g.ActionType} ON {securable} {fqn} TO `{g.Principal}`;")
         except Exception as e:
-            print(f"[WARN] Grants {securable.lower()} {fqn}: {e}")
+            print(f"[WARN] Grants {securable.lower()} {fqn}: {_short(e)}")
 
 _uc_put(f"{output_path}/04_grants.sql", "\n".join(grant_statements))
 print(f"[04_grants] {len(grant_statements)} grants exportés")
