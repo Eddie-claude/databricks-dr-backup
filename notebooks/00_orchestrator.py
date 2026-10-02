@@ -106,6 +106,20 @@ clone_result = run_step("data_clone", "./02_data_clone", {
 }, critical=True)
 
 # COMMAND ----------
+# DBTITLE 1, Étape 2b — Fichiers des volumes managés (non critique)
+
+# Après la copie des tables : un échec ici dégrade le statut global sans bloquer le reste.
+volume_files_result = run_step("volume_files", "./14_volume_files", {
+    "backup_root":    backup_root,
+    "backup_date":    backup_date,
+    "lib_path":       lib_path,
+    "retain_daily":   retain_daily,
+    "retain_monthly": retain_monthly,
+    "max_parallel":   max_parallel,
+    "dry_run":        dry_run,
+}, critical=False)
+
+# COMMAND ----------
 # DBTITLE 1, Écrire le manifest courant dans ADLS (avant diff)
 
 table_names = uc_result.get("table_names", [])
@@ -141,7 +155,7 @@ workspace_jobs_path          = f"{backup_root}/{backup_date}/jobs/jobs_all.json"
 workspace_notebooks_manifest = f"{backup_root}/{backup_date}/notebooks"
 
 try:
-    jobs_raw = json.loads(dbutils.fs.head(workspace_jobs_path, 1_000_000))
+    jobs_raw = json.loads(dbutils.fs.head(workspace_jobs_path, 50_000_000))  # 1 Mo tronquait le JSON
     job_names = [j.get("settings", j).get("name", str(j.get("job_id", ""))) for j in jobs_raw]
     current_manifest["jobs"] = job_names
     print(f"[OK] {len(job_names)} jobs chargés dans le manifest")
@@ -174,11 +188,24 @@ def _notebook_relative_path(full_path: str) -> str:
     marker = f"/{backup_date}/notebooks/"
     return full_path.split(marker, 1)[1] if marker in full_path else full_path
 
+# Extension historique par langage : garder exactement le format de chemin des manifests
+# précédents, sinon le différentiel verrait tous les notebooks ajoutés ET supprimés.
+_LANG_EXT = {"PYTHON": ".py", "SQL": ".sql", "SCALA": ".scala", "R": ".r"}
+
 try:
-    nb_files = sorted(
-        _notebook_relative_path(p)
-        for p in _list_notebooks_recursive(workspace_notebooks_manifest)
-    )
+    try:
+        # Depuis la v4.2, 05_workspace_config écrit un inventaire (workspace/manifest.json)
+        ws_inventory = json.loads(dbutils.fs.head(f"{backup_root}/{backup_date}/workspace/manifest.json", 50_000_000))
+        nb_files = sorted(
+            e["path"].lstrip("/") + _LANG_EXT.get(e.get("language") or "PYTHON", ".py")
+            for e in ws_inventory.get("objects", []) if e.get("object_type") == "NOTEBOOK"
+        )
+    except Exception:
+        # Backups antérieurs : un fichier par notebook sous {date}/notebooks/
+        nb_files = sorted(
+            _notebook_relative_path(p)
+            for p in _list_notebooks_recursive(workspace_notebooks_manifest)
+        )
     current_manifest["notebooks"] = nb_files
     print(f"[OK] {len(nb_files)} notebooks listés dans le manifest")
 except Exception as e:

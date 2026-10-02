@@ -50,6 +50,7 @@ dbutils.widgets.text(     "backup_date",    str(date.today()), "Date du backup (
 dbutils.widgets.text(     "job_filter",     "",             "Filtre nom de job (sous-chaîne, vide = tous)")
 dbutils.widgets.dropdown( "conflict_mode",  "skip",         ["skip", "recreate"], "Si job existe déjà : skip / recreate")
 dbutils.widgets.dropdown( "dry_run",        "true",         ["true", "false"],    "Dry-run (true = simulation)")
+dbutils.widgets.text(     "lib_path",       "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
 backup_root   = dbutils.widgets.get("backup_root").strip().rstrip("/")
 backup_date   = dbutils.widgets.get("backup_date").strip()
@@ -199,6 +200,27 @@ print(f"[OK] {len(existing_jobs)} job(s) existant(s) sur le workspace")
 # MAGIC %md ## Étape 5 — Restauration
 
 # COMMAND ----------
+import sys
+sys.path.insert(0, dbutils.widgets.get("lib_path"))
+from workspace_export import explicit_acl
+
+# Permissions des jobs (v4.2+) : {ancien job_id: ACL} ; absentes des backups antérieurs
+try:
+    job_permissions = json.loads(_uc_head(f"{backup_root}/{backup_date}/jobs/jobs_permissions.json"))
+    print(f"[OK] Permissions sauvegardées pour {len(job_permissions)} job(s)")
+except Exception:
+    job_permissions = {}
+    print("[INFO] Pas de permissions de jobs dans ce backup (antérieur à la v4.2)")
+
+def restore_job_permissions(old_id, new_id) -> str:
+    """Ajoute (PATCH) les permissions directes de l'ancien job au nouveau. IS_OWNER exclu."""
+    acl = explicit_acl(job_permissions.get(str(old_id)))
+    if not acl:
+        return "aucune"
+    r = requests.patch(f"{host}/api/2.0/permissions/jobs/{new_id}", headers=headers,
+                       json={"access_control_list": acl}, timeout=30)
+    return f"{len(acl)} appliquée(s)" if r.ok else f"ÉCHEC {r.status_code} {r.text[:120]}"
+
 def strip_readonly_fields(settings: dict) -> dict:
     """
     Supprime les champs calculés que l'API de création n'accepte pas.
@@ -250,7 +272,8 @@ for job in jobs_to_restore:
         print(f"   Tâches : {', '.join(t.get('task_key', '?') for t in tasks)}")
         if schedule_info:
             print(f"   {schedule_info}")
-        print(f"   → Créerait le job via POST /api/2.1/jobs/create\n")
+        print(f"   → Créerait le job via POST /api/2.1/jobs/create")
+        print(f"   → Permissions à réappliquer : {len(explicit_acl(job_permissions.get(str(old_id))))}\n")
         results.append({
             "job_name": job_name, "old_id": old_id, "new_id": None, "status": "dry_run",
         })
@@ -268,7 +291,7 @@ for job in jobs_to_restore:
         )
         if r.ok:
             new_id = r.json().get("job_id")
-            print(f"   [OK] Job créé — nouveau id={new_id}\n")
+            print(f"   [OK] Job créé — nouveau id={new_id} — permissions : {restore_job_permissions(old_id, new_id)}\n")
             results.append({
                 "job_name": job_name, "old_id": old_id, "new_id": new_id, "status": "created",
             })

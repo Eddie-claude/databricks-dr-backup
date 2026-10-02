@@ -11,9 +11,11 @@
 # MAGIC |-------|----------------|---------------------|
 # MAGIC | `tables` | `07_restore` | Tables Delta (Unity Catalog) |
 # MAGIC | `uc_objects` | `12_restore_uc_objects` | Volumes + fonctions UC (définitions) |
+# MAGIC | `volume_files` | `15_restore_volume_files` | Fichiers des volumes managés (état à `restore_point`, sinon le dernier) |
 # MAGIC | `grants` | `11_restore_grants` | Permissions UC (GRANT sur catalogs, schemas, tables, volumes, fonctions) |
 # MAGIC | `jobs` | `09_restore_jobs` | Définitions de jobs Databricks |
-# MAGIC | `notebooks` | `08_restore_workspace` | Sources notebooks (.py/.sql/.scala) |
+# MAGIC | `notebooks` | `08_restore_workspace` | Notebooks, fichiers et dashboards du workspace |
+# MAGIC | `pipelines` | `13_restore_pipelines` | Pipelines Lakeflow / DLT (définition + permissions), après les notebooks |
 # MAGIC | `acls` | `08_restore_workspace` | ACLs workspace + ACLs repos Git |
 # MAGIC
 # MAGIC > ⚠️ **`grants` et `acls` sont deux choses distinctes :**
@@ -43,7 +45,7 @@ from datetime import date
 
 dbutils.widgets.text(       "backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
 dbutils.widgets.text(       "backup_date",    "",          "Date du backup (vide = dernier backup)")
-dbutils.widgets.multiselect("restore_scope",  "jobs",      ["tables", "uc_objects", "grants", "jobs", "notebooks", "acls"], "Périmètre de restauration")
+dbutils.widgets.multiselect("restore_scope",  "jobs",      ["tables", "uc_objects", "volume_files", "grants", "jobs", "notebooks", "pipelines", "acls"], "Périmètre de restauration")
 dbutils.widgets.dropdown(   "dry_run",        "true",      ["true", "false"], "Dry-run (true = simulation)")
 
 # Paramètres tables (utilisés si scope contient 'tables')
@@ -185,6 +187,29 @@ else:
     print("[SKIP] Volumes + fonctions UC — non sélectionné dans restore_scope")
 
 # COMMAND ----------
+# MAGIC %md ## Étape 1c — Restauration des fichiers des volumes managés
+# MAGIC Après uc_objects : le volume doit exister. `restore_point` au format AAAA-MM-JJ fixe la date.
+
+# COMMAND ----------
+volume_files_result = {}
+
+if "volume_files" in restore_scope:
+    volume_files_result = run_step(
+        name          = "restore_volume_files",
+        notebook_path = "./15_restore_volume_files",
+        params        = {
+            "backup_root":   backup_root,
+            "restore_date":  restore_point[:10] if restore_point else "",
+            "volume_filter": "*.*.*",
+            "target_volume": "",
+            "dry_run":       dry_run,
+        },
+        critical = False,
+    )
+else:
+    print("[SKIP] Fichiers des volumes — non sélectionné dans restore_scope")
+
+# COMMAND ----------
 # MAGIC %md ## Étape 2 — Restauration Grants Unity Catalog
 
 # COMMAND ----------
@@ -249,6 +274,28 @@ if "notebooks" in restore_scope:
     )
 else:
     print("[SKIP] Notebooks — non sélectionné dans restore_scope")
+
+# COMMAND ----------
+# MAGIC %md ## Étape 4b — Restauration Pipelines
+# MAGIC Après les notebooks : un pipeline restauré doit retrouver son code source.
+
+# COMMAND ----------
+pipelines_result = {}
+
+if "pipelines" in restore_scope:
+    pipelines_result = run_step(
+        name          = "restore_pipelines",
+        notebook_path = "./13_restore_pipelines",
+        params        = {
+            "backup_root":   backup_root,
+            "backup_date":   backup_date,
+            "conflict_mode": conflict_mode,
+            "dry_run":       dry_run,
+        },
+        critical = False,
+    )
+else:
+    print("[SKIP] Pipelines — non sélectionné dans restore_scope")
 
 # COMMAND ----------
 # MAGIC %md ## Étape 5 — Restauration ACLs (workspace + repos)
@@ -316,6 +363,17 @@ if grants_result:
     g_err  = grants_result.get("errors", 0)
     print(f"║  Grants UC : {g_ok} appliqués, {g_skip} ignorés, {g_err} erreurs{'':<25}║")
 
+if volume_files_result:
+    v_ok  = volume_files_result.get("ok", 0)
+    v_err = volume_files_result.get("errors", 0)
+    print(f"║  Volumes   : {v_ok} restaurés, {v_err} erreurs{'':<31}║")
+
+if pipelines_result:
+    p_ok   = pipelines_result.get("ok", 0)
+    p_skip = pipelines_result.get("skipped", 0)
+    p_err  = pipelines_result.get("errors", 0)
+    print(f"║  Pipelines : {p_ok} créés, {p_skip} ignorés, {p_err} erreurs{'':<22}║")
+
 if jobs_result:
     j_ok   = jobs_result.get("ok", 0)
     j_skip = jobs_result.get("skipped", 0)
@@ -355,6 +413,8 @@ dbutils.notebook.exit(json.dumps({
     "uc_objects":     uc_objects_result,
     "grants":         grants_result,
     "jobs":           jobs_result,
+    "pipelines":      pipelines_result,
+    "volume_files":   volume_files_result,
     "notebooks":      notebooks_result,
     "acls":           acls_result,
 }))

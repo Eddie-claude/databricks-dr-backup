@@ -8,7 +8,7 @@
 # MAGIC
 # MAGIC | Section | Contenu restauré | Source backup |
 # MAGIC |---------|-----------------|---------------|
-# MAGIC | 8.1 | Sources notebooks (.py / .sql / .scala) | `{date}/notebooks/` |
+# MAGIC | 8.1 | Notebooks, fichiers et dashboards (contenu natif) | `{date}/workspace/objects/` (v4.2+) ou `{date}/notebooks/` (avant) |
 # MAGIC | 8.2 | ACLs notebooks et dossiers workspace | `{date}/workspace_config/workspace_acls.json` |
 # MAGIC | 8.3 | ACLs repos Git | `{date}/workspace_config/repos_acls.json` |
 # MAGIC
@@ -17,7 +17,9 @@
 # COMMAND ----------
 import base64
 import json
+import sys
 import requests
+from pyspark.sql import functions as F
 from datetime import date
 from pyspark.sql import SparkSession
 
@@ -51,6 +53,7 @@ dbutils.widgets.dropdown( "restore_type",      "notebooks", ["notebooks", "acls"
 dbutils.widgets.text(     "notebook_filter",   "", "Filtre chemin notebook (ex: /Shared/mon-dossier ou vide = tous)")
 dbutils.widgets.text(     "target_workspace_path", "", "Dossier cible workspace (vide = chemin d'origine)")
 dbutils.widgets.dropdown( "dry_run",           "true", ["true", "false"], "Dry-run (true = simulation)")
+dbutils.widgets.text(     "lib_path",          "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
 
 backup_root           = dbutils.widgets.get("backup_root").strip().rstrip("/")
 backup_date           = dbutils.widgets.get("backup_date").strip()
@@ -60,6 +63,17 @@ target_workspace_path = dbutils.widgets.get("target_workspace_path").strip().rst
 dry_run               = dbutils.widgets.get("dry_run").lower() == "true"
 
 notebooks_backup_root = f"{backup_root}/{backup_date}/notebooks"
+objects_path          = f"{backup_root}/{backup_date}/workspace/objects"
+
+sys.path.insert(0, dbutils.widgets.get("lib_path"))
+from workspace_export import import_request, remap_path
+
+# Format v4.2+ : contenu natif de tous les objets dans un seul jeu de données
+try:
+    dbutils.fs.ls(objects_path)
+    new_format = True
+except Exception:
+    new_format = False
 acls_backup_path      = f"{backup_root}/{backup_date}/workspace_config/workspace_acls.json"
 repos_acls_path       = f"{backup_root}/{backup_date}/workspace_config/repos_acls.json"
 
@@ -134,7 +148,39 @@ def adls_path_to_workspace_path(adls_path, adls_root):
             break
     return "/" + rel
 
-if restore_type in ("notebooks", "both"):
+if restore_type in ("notebooks", "both") and new_format:
+    print(f"\n{'─'*60}")
+    print(f"{prefix}RESTAURATION NOTEBOOKS, FICHIERS ET DASHBOARDS (format v4.2)")
+    print(f"{'─'*60}")
+    objects = spark.read.parquet(objects_path)
+    if notebook_filter:
+        objects = objects.where(F.col("path").startswith(notebook_filter.rstrip("/")))
+    print(f"[INFO] {objects.count()} objet(s) dans le backup")
+
+    for row in objects.orderBy("path").toLocalIterator():
+        ws_path = remap_path(row.path, target_workspace_path)
+        body = import_request({"object_type": row.object_type, "file_type": row.file_type},
+                              base64.b64encode(bytes(row.content)).decode("utf-8"), ws_path)
+        print(f"  {'──' if dry_run else '▶ '} {ws_path}  [{row.object_type}{', ' + row.file_type if row.file_type else ''}]")
+        if dry_run:
+            nb_ok += 1
+            continue
+        try:
+            parent = "/".join(body["path"].split("/")[:-1])
+            requests.post(f"{host}/api/2.0/workspace/mkdirs", headers=headers, json={"path": parent}, timeout=10)
+            r = requests.post(f"{host}/api/2.0/workspace/import", headers=headers, json=body, timeout=60)
+            if r.ok:
+                nb_ok += 1
+            else:
+                print(f"     [WARN] {r.status_code} — {r.text[:150]}")
+                nb_error += 1
+        except Exception as e:
+            print(f"     [ERROR] {str(e)[:200]}")
+            nb_error += 1
+
+    print(f"\n[OK] Objets : {nb_ok} {'simulés' if dry_run else 'restaurés'}, {nb_error} erreurs")
+
+if restore_type in ("notebooks", "both") and not new_format:
     print(f"\n{'─'*60}")
     print(f"{prefix}RESTAURATION NOTEBOOKS")
     print(f"{'─'*60}")
