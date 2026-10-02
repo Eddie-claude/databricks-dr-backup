@@ -58,6 +58,38 @@ max_file_retention = retain_daily + 2
 # Schémas UC système : vues uniquement, non cloneables par DEEP CLONE
 _EXCLUDED_SCHEMAS = {"information_schema"}
 
+# Catalogs sans données propres à sauvegarder : fédérés (Lakehouse Federation, données dans la
+# base source), Delta Sharing (données chez le fournisseur), système et internes Databricks.
+# Leur définition (connexion, partage) relève de l'IaC : un CREATE CATALOG simple les recréerait
+# en catalog standard vide. Le type n'est pas dans information_schema, on le lit via l'API UC.
+NON_BACKUP_CATALOG_TYPES = {"FOREIGN_CATALOG", "DELTASHARING_CATALOG", "SYSTEM_CATALOG", "INTERNAL_CATALOG"}
+
+def _split_backup_catalogs(names: list, types: dict) -> tuple:
+    """(catalogs à sauvegarder, {catalog exclu: type}) ; un type inconnu ou absent est gardé."""
+    skipped = {n: types[n] for n in names if types.get(n) in NON_BACKUP_CATALOG_TYPES}
+    return [n for n in names if n not in skipped], skipped
+
+def _catalog_types() -> dict:
+    """{nom: catalog_type} via l'API Unity Catalog ; {} si elle est indisponible."""
+    import requests
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    url = f"{ctx.apiUrl().get()}/api/2.1/unity-catalog/catalogs"
+    headers = {"Authorization": f"Bearer {ctx.apiToken().get()}"}
+    types, params = {}, {"max_results": 1000}
+    try:
+        while True:
+            r = requests.get(url, headers=headers, params=params, timeout=30)
+            r.raise_for_status()
+            d = r.json()
+            types.update({c["name"]: c.get("catalog_type", "") for c in d.get("catalogs", [])})
+            if not d.get("next_page_token"):
+                return types
+            params["page_token"] = d["next_page_token"]
+    except Exception as e:
+        print(f"[WARN] Types de catalog indisponibles (API Unity Catalog), catalogs fédérés / "
+              f"Delta Sharing non filtrés : {str(e)[:200]}")
+        return types
+
 table_names = [
     t for t in uc_result.get("table_names", [])
     if len(t.split(".")) == 3 and t.split(".")[1] not in _EXCLUDED_SCHEMAS
@@ -67,8 +99,12 @@ table_names = [
 if not table_names:
     print("[INFO] uc_metadata_result vide — auto-découverte des tables depuis Unity Catalog")
     _EXCLUDED_CATALOGS = {"hive_metastore", "system", "samples"}
-    for _cat in [r.catalog for r in spark.sql("SHOW CATALOGS").collect()
-                 if r.catalog not in _EXCLUDED_CATALOGS]:
+    _visible = [r.catalog for r in spark.sql("SHOW CATALOGS").collect()
+                if r.catalog not in _EXCLUDED_CATALOGS]
+    _catalogs, _skipped = _split_backup_catalogs(_visible, _catalog_types())
+    for _c, _t in sorted(_skipped.items()):
+        print(f"[SKIP] Catalog {_c} ({_t}) non sauvegardé")
+    for _cat in _catalogs:
         for _sch in [r.databaseName for r in spark.sql(f"SHOW SCHEMAS IN `{_cat}`").collect()
                      if r.databaseName not in _EXCLUDED_SCHEMAS]:
             try:

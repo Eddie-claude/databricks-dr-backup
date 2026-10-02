@@ -47,6 +47,38 @@ EXCLUDED_SCHEMAS  = {"information_schema"}
 # Catalogs visibles mais non lisibles par l'identité courante (USE CATALOG manquant…)
 inaccessible_catalogs = set()
 
+# Catalogs sans données propres à sauvegarder : fédérés (Lakehouse Federation, données dans la
+# base source), Delta Sharing (données chez le fournisseur), système et internes Databricks.
+# Leur définition (connexion, partage) relève de l'IaC : un CREATE CATALOG simple les recréerait
+# en catalog standard vide. Le type n'est pas dans information_schema, on le lit via l'API UC.
+NON_BACKUP_CATALOG_TYPES = {"FOREIGN_CATALOG", "DELTASHARING_CATALOG", "SYSTEM_CATALOG", "INTERNAL_CATALOG"}
+
+def _split_backup_catalogs(names: list, types: dict) -> tuple:
+    """(catalogs à sauvegarder, {catalog exclu: type}) ; un type inconnu ou absent est gardé."""
+    skipped = {n: types[n] for n in names if types.get(n) in NON_BACKUP_CATALOG_TYPES}
+    return [n for n in names if n not in skipped], skipped
+
+def _catalog_types() -> dict:
+    """{nom: catalog_type} via l'API Unity Catalog ; {} si elle est indisponible."""
+    import requests
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    url = f"{ctx.apiUrl().get()}/api/2.1/unity-catalog/catalogs"
+    headers = {"Authorization": f"Bearer {ctx.apiToken().get()}"}
+    types, params = {}, {"max_results": 1000}
+    try:
+        while True:
+            r = requests.get(url, headers=headers, params=params, timeout=30)
+            r.raise_for_status()
+            d = r.json()
+            types.update({c["name"]: c.get("catalog_type", "") for c in d.get("catalogs", [])})
+            if not d.get("next_page_token"):
+                return types
+            params["page_token"] = d["next_page_token"]
+    except Exception as e:
+        print(f"[WARN] Types de catalog indisponibles (API Unity Catalog), catalogs fédérés / "
+              f"Delta Sharing non filtrés : {str(e)[:200]}")
+        return types
+
 def _short(e) -> str:
     """Première ligne de l'erreur : les exceptions Spark embarquent une stacktrace JVM de
     centaines de lignes qui fait dépasser la limite de sortie du notebook (sortie tronquée)."""
@@ -59,10 +91,14 @@ print(f"[OK] Démarré à {datetime.now().strftime('%H:%M:%S')}")
 # MAGIC %md ## 1 — Découverte des catalogs et tables
 
 # COMMAND ----------
-catalogs = [
+_visible = [
     r.catalog for r in spark.sql("SHOW CATALOGS").collect()
     if r.catalog not in EXCLUDED_CATALOGS
 ]
+catalogs, skipped_catalogs = _split_backup_catalogs(_visible, _catalog_types())
+if skipped_catalogs:
+    print(f"[INFO] {len(skipped_catalogs)} catalog(s) fédéré(s) / Delta Sharing ignoré(s) "
+          f"(non sauvegardés, voir section 6)")
 print(f"[OK] {len(catalogs)} catalog(s) à analyser : {catalogs}")
 
 table_fqns = []
@@ -366,7 +402,7 @@ else:
     print("[INFO] Mesure des volumes désactivée (measure_volumes=false)")
 
 # COMMAND ----------
-# MAGIC %md ## 6 — Catalogs inaccessibles
+# MAGIC %md ## 6 — Catalogs non couverts (fédérés, Delta Sharing, inaccessibles)
 
 # COMMAND ----------
 # Ces catalogs n'ont été ni audités ni mesurés. Lancé avec l'identité du job de backup,
@@ -378,5 +414,11 @@ if inaccessible_catalogs:
         print(f"  - {c}")
 else:
     print("[OK] Tous les catalogs ont pu être lus")
+
+# Pas une anomalie : leurs données ne sont pas dans Databricks, leur définition relève de l'IaC.
+if skipped_catalogs:
+    print(f"[INFO] {len(skipped_catalogs)} catalog(s) hors périmètre du backup (données externes) :")
+    for c, t in sorted(skipped_catalogs.items()):
+        print(f"  - {c}  ({t})")
 
 print(f"[OK] Terminé à {datetime.now().strftime('%H:%M:%S')}")

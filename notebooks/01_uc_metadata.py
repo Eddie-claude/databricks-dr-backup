@@ -69,7 +69,42 @@ output_path = f"{backup_root}/{backup_date}/uc_metadata"
 # information_schema = schéma système UC (vues uniquement, non cloneable)
 EXCLUDED_SCHEMAS = {"information_schema"}
 
-catalogs = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system", "samples")]
+# Catalogs sans données propres à sauvegarder : fédérés (Lakehouse Federation, données dans la
+# base source), Delta Sharing (données chez le fournisseur), système et internes Databricks.
+# Leur définition (connexion, partage) relève de l'IaC : un CREATE CATALOG simple les recréerait
+# en catalog standard vide. Le type n'est pas dans information_schema, on le lit via l'API UC.
+NON_BACKUP_CATALOG_TYPES = {"FOREIGN_CATALOG", "DELTASHARING_CATALOG", "SYSTEM_CATALOG", "INTERNAL_CATALOG"}
+
+def _split_backup_catalogs(names: list, types: dict) -> tuple:
+    """(catalogs à sauvegarder, {catalog exclu: type}) ; un type inconnu ou absent est gardé."""
+    skipped = {n: types[n] for n in names if types.get(n) in NON_BACKUP_CATALOG_TYPES}
+    return [n for n in names if n not in skipped], skipped
+
+def _catalog_types() -> dict:
+    """{nom: catalog_type} via l'API Unity Catalog ; {} si elle est indisponible."""
+    import requests
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    url = f"{ctx.apiUrl().get()}/api/2.1/unity-catalog/catalogs"
+    headers = {"Authorization": f"Bearer {ctx.apiToken().get()}"}
+    types, params = {}, {"max_results": 1000}
+    try:
+        while True:
+            r = requests.get(url, headers=headers, params=params, timeout=30)
+            r.raise_for_status()
+            d = r.json()
+            types.update({c["name"]: c.get("catalog_type", "") for c in d.get("catalogs", [])})
+            if not d.get("next_page_token"):
+                return types
+            params["page_token"] = d["next_page_token"]
+    except Exception as e:
+        print(f"[WARN] Types de catalog indisponibles (API Unity Catalog), catalogs fédérés / "
+              f"Delta Sharing non filtrés : {str(e)[:200]}")
+        return types
+
+_visible = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system", "samples")]
+catalogs, skipped_catalogs = _split_backup_catalogs(_visible, _catalog_types())
+for _c, _t in sorted(skipped_catalogs.items()):
+    print(f"[SKIP] Catalog {_c} ({_t}) non sauvegardé : définition à gérer en IaC")
 catalog_ddl = "\n".join([f"CREATE CATALOG IF NOT EXISTS `{c}`;" for c in catalogs])
 
 _uc_put(f"{output_path}/01_catalogs.sql", catalog_ddl)
@@ -233,6 +268,7 @@ print(f"[04_grants] {len(grant_statements)} grants exportés")
 
 result = {
     "catalogs": catalogs,
+    "skipped_catalogs": skipped_catalogs,
     "table_names": table_names,
     "grant_count": len(grant_statements),
     "volume_count": len(volume_ddls),

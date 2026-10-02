@@ -129,6 +129,8 @@ bullet(doc, "Les tables non Delta (Parquet externe, CSV, formats propriétaires)
 bullet(doc, "Les vues matérialisées et les Streaming Tables (non clonables)")
 bullet(doc, "Les secrets et les scopes de secrets Databricks")
 bullet(doc, "Les catalogs système : hive_metastore, system, samples")
+bullet(doc, "Les catalogs fédérés (Lakehouse Federation) et Delta Sharing : leurs données restent dans la "
+            "source ou chez le fournisseur, leur définition (connexion, partage) est à gérer en IaC")
 bullet(doc, "Les données hors Unity Catalog (DBFS racine, montages legacy)")
 bullet(doc, "Le contenu (fichiers) des volumes managés : seule leur définition est sauvegardée, ils sont recréés vides. Les fichiers des volumes externes restent sur leur stockage d'origine")
 
