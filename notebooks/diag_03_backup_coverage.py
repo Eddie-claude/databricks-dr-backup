@@ -196,9 +196,10 @@ def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2") -> 
             return ("SCRIPT" if v42 else "NONE"), "OTHER", \
                    "Définition " + ("exportée (05_volumes.sql)" if v42 else "non exportée en v4.1") + \
                    " ; fichiers sur le stockage d'origine (protection du compte de stockage)"
-        return ("SCRIPT" if v42 else "NONE"), "NONE", \
-               "Définition " + ("exportée (05_volumes.sql)" if v42 else "non exportée en v4.1") + \
-               " ; fichiers non sauvegardés (volume recréé vide)"
+        if v42:
+            return "SCRIPT", "SCRIPT", ("Définition exportée (05_volumes.sql) ; fichiers sauvegardés par "
+                                        "14_volume_files (point-in-time sur la rétention quotidienne)")
+        return "NONE", "NONE", "Définition et fichiers non sauvegardés en v4.1"
     if kind == "FUNCTION":
         return ("SCRIPT" if v42 else "NONE"), "NA", \
                "DDL exporté (06_functions.sql)" if v42 else "Non exportée en v4.1"
@@ -757,7 +758,7 @@ legend_rows = "".join(f"<tr><td>{v[0]} <b>{e(v[1])}</b></td><td>{e(t)}</td></tr>
     (VERDICTS["OK"], "Définition et données recréées par le script de backup DR."),
     (VERDICTS["AS_CODE"], "Recréé par l'infrastructure as code (Terraform, bundle) : identité créatrice ou liste fournie."),
     (VERDICTS["AUTRE"], "Données hors Databricks (base fédérée, stockage d'un volume externe), dans Git, ou recalculées."),
-    (VERDICTS["PARTIEL"], "Définition sauvegardée mais pas les données (ex. volume managé recréé vide)."),
+    (VERDICTS["PARTIEL"], "Définition sauvegardée mais pas les données (ex. table dans un format non clonable)."),
     (VERDICTS["INACCESSIBLE"], "Le script le sauvegarderait, mais le compte de backup n'a pas les droits."),
     (VERDICTS["ECHEC"], "Prévu par le script mais en erreur lors du dernier backup."),
     (VERDICTS["NON_COUVERT"], "Aucun moyen de restauration identifié."),

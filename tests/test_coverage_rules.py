@@ -65,7 +65,7 @@ def test_iac_file_names_are_case_and_backtick_insensitive():
     ("TABLE",   "VIEW",     "UNKNOWN_DATA_SOURCE_FORMAT", "v4.2", ("SCRIPT", "NA")),
     ("TABLE",   "MATERIALIZED_VIEW", "", "v4.2", ("SCRIPT", "OTHER")),
     ("TABLE",   "STREAMING_TABLE",   "", "v4.2", ("SCRIPT", "OTHER")),
-    ("VOLUME",  "MANAGED",  "", "v4.2", ("SCRIPT", "NONE")),
+    ("VOLUME",  "MANAGED",  "", "v4.2", ("SCRIPT", "SCRIPT")),
     ("VOLUME",  "EXTERNAL", "", "v4.2", ("SCRIPT", "OTHER")),
     ("VOLUME",  "MANAGED",  "", "v4.1", ("NONE", "NONE")),
     ("VOLUME",  "EXTERNAL", "", "v4.1", ("NONE", "OTHER")),

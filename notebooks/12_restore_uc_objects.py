@@ -15,9 +15,9 @@
 # MAGIC - À lancer **après** la restauration des tables (une fonction SQL peut lire une table)
 # MAGIC   et **avant** celle des grants (les grants VOLUME/FUNCTION visent ces objets).
 # MAGIC - Les objets déjà existants ne sont pas modifiés (`IF NOT EXISTS`).
-# MAGIC - Seule la définition des volumes est restaurée. Un volume EXTERNAL retrouve ses fichiers
-# MAGIC   (ils sont restés sur son stockage, l'External Location doit exister) ; un volume MANAGED
-# MAGIC   est recréé **vide**.
+# MAGIC - Seule la définition des volumes est restaurée ici. Un volume EXTERNAL retrouve ses fichiers
+# MAGIC   (ils sont restés sur son stockage, l'External Location doit exister) ; un volume MANAGED est
+# MAGIC   recréé vide, ses fichiers se restaurent ensuite avec `15_restore_volume_files` (scope `volume_files`).
 # MAGIC - Les fonctions qui en appellent d'autres sont rejouées en plusieurs passes.
 # MAGIC - **dry_run = true** : affiche les statements sans les exécuter.
 
