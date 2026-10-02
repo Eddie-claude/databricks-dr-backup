@@ -32,6 +32,11 @@ SQL_FILES_ORDER = [
 RETRY_FILES = {"03_tables.sql", "06_functions.sql"}
 
 
+def files_to_run(only_grants: bool) -> list:
+    """Fichiers SQL à rejouer, dans l'ordre."""
+    return ["04_grants.sql"] if only_grants else SQL_FILES_ORDER
+
+
 def download_sql_files(backup_root: str, backup_date: str, local_dir: str) -> None:
     """Télécharge les fichiers SQL depuis ADLS vers un dossier local."""
     src = f"{backup_root}/{backup_date}/uc_metadata"
@@ -80,6 +85,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Restore Unity Catalog from SQL dump")
     parser.add_argument("--backup-date", required=True, help="YYYY-MM-DD")
     parser.add_argument("--backup-root", required=True, help="abfss://...")
+    parser.add_argument("--only-grants", action="store_true",
+                        help="Rejouer uniquement les permissions (04_grants.sql), ex. après un apply IaC")
     args = parser.parse_args()
 
     host = os.environ["DATABRICKS_HOST"]
@@ -93,7 +100,7 @@ def main() -> None:
         print(f"[Restore UC] Téléchargement des dumps SQL depuis {args.backup_root}...")
         download_sql_files(args.backup_root, args.backup_date, tmpdir)
 
-        for sql_file in SQL_FILES_ORDER:
+        for sql_file in files_to_run(args.only_grants):
             # Rejeu avant les grants, pour que ceux-ci trouvent les objets rattrapés
             if sql_file == "04_grants.sql" and to_retry:
                 print(f"\n[Restore UC] Nouvelle tentative pour {len(to_retry)} statement(s) en échec (dépendances)...")

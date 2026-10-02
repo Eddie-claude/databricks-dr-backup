@@ -37,9 +37,26 @@ Il distingue deux scénarios :
 
 | Script | Périmètre restauré |
 |--------|--------------------|
-| `scripts/restore_uc.py` | Structure Unity Catalog : catalogs, schemas, tables DDL, grants |
+| `scripts/restore_uc.py` | Structure Unity Catalog : catalogs, schemas, tables, volumes, fonctions (DDL), grants — `--only-grants` pour les permissions seules |
 | `scripts/restore_workspace.py` | Jobs + Notebooks |
 | `scripts/restore_workspace_config.py` | ACLs workspace + ACLs repos Git |
+
+### Avant de restaurer : savoir ce qui est restaurable
+
+Le notebook `diag_03_backup_coverage` (lecture seule, compte admin du metastore) produit un rapport HTML + Excel qui indique pour chaque objet du metastore et du workspace s'il est restaurable par le backup, par l'IaC, par un autre moyen — ou pas du tout. À tenir à jour et à consulter avant un exercice de restauration.
+
+---
+
+## Ordre de restauration quand une partie de la plateforme est gérée as code
+
+Le backup reconstitue l'état réel du metastore, y compris des objets que l'IaC (Terraform, bundle) sait aussi recréer. **Le code reste la source de vérité** : il passe en premier, le backup complète.
+
+1. **IaC** : `terraform apply` / `databricks bundle deploy` — storage credentials, external locations, connexions, catalogs (dont fédérés), volumes, fonctions, pipelines, et les grants s'ils sont en code.
+2. **Données** : tables Delta (`07_restore`, scope `tables`).
+3. **Compléments du backup** : volumes et fonctions créés hors code (scope `uc_objects`, `IF NOT EXISTS` : les objets déjà recréés par l'IaC ne sont pas modifiés), puis grants (scope `grants` ou `restore_uc.py --only-grants`).
+
+> ⚠️ Ne pas inverser : un objet recréé par le backup avant le `terraform apply` n'est pas dans le state Terraform, l'apply échoue en « already exists » (il faut alors un `terraform import`).
+> ⚠️ Si les grants sont gérés en Terraform de façon autoritaire (`databricks_grants`), ne pas rejouer `04_grants.sql` sur ces objets : le prochain apply retirerait les grants ajoutés.
 
 ---
 
@@ -402,7 +419,12 @@ databricks workspace ls /Shared
 | Composant | Action manuelle requise |
 |-----------|------------------------|
 | **Secrets Databricks** | Recréer les secret scopes et valeurs manuellement |
-| **Delta Sharing** | Reconfigurer les partages avec les destinataires |
+| **Delta Sharing** | Reconfigurer les partages avec les destinataires ; catalogs Delta Sharing à recréer depuis le partage |
+| **Catalogs fédérés** | Recréer la connexion et le catalog (IaC) : données dans la base source, non sauvegardées |
+| **External locations / storage credentials / connexions** | Non sauvegardés par le script : à recréer par l'IaC |
+| **Volumes managés** | Définition restaurée (`uc_objects`), **fichiers non sauvegardés** : volume recréé vide |
+| **Pipelines (Lakeflow / DLT)** | Non sauvegardés (chantier en cours) : recréer via IaC / bundle, puis full refresh |
+| **Modèles MLflow (Unity Catalog)** | Non sauvegardés : ni définition ni versions |
 | **MLflow** | Reconfigurer les experiments si nécessaire |
 | **Service Principals** | Reconfigurer dans Azure Entra ID |
 | **Users / Groups** | Synchronisation Entra ID → automatique à la reconnexion |

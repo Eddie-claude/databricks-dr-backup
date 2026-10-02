@@ -1,10 +1,12 @@
-"""Génère DR_Backup_Guide_Deploiement_v4.1.docx.
+"""Génère DR_Backup_Guide_Deploiement_v4.2.docx.
 
 Adapté de old/generate_guide.py (v3, 3 juin 2026) pour conserver la charte des guides
 livrés au client. Reflète l'état du code après les correctifs de juillet et d'août :
 weekly abandonné (Option C), retain_daily=30, VACUUM hebdomadaire et parallélisé,
 cluster daily multi-worker, reprise d'un jour sur l'autre, archivage des logs,
-notebooks de restauration 07 à 11, annexes dépannage.
+notebooks de restauration 07 à 12, annexes dépannage. v4.2 : volumes et fonctions UC,
+exclusion des catalogs fédérés / Delta Sharing, driver E8s_v3, audit des volumes,
+rapport de couverture, ordre de restauration avec l'IaC.
 
 La charte est dans docs/docx_style.py, partagée avec generate_release_notes.py.
 
@@ -49,7 +51,7 @@ run.font.color.rgb = RGBColor(0x40, 0x40, 0x40)
 
 version = doc.add_paragraph()
 version.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = version.add_run("Version 4.1")
+run = version.add_run("Version 4.2")
 run.font.size = Pt(13)
 run.font.bold = True
 run.font.color.rgb = RGBColor(0x40, 0x40, 0x40)
@@ -65,7 +67,7 @@ doc.add_paragraph()
 doc.add_paragraph()
 changelog = doc.add_paragraph()
 changelog.alignment = WD_ALIGN_PARAGRAPH.CENTER
-run = changelog.add_run("Nouveautés de la version 4.1")
+run = changelog.add_run("Nouveautés de la version 4.2")
 run.font.size = Pt(11)
 run.font.bold = True
 doc.add_paragraph()
@@ -74,16 +76,13 @@ add_table(
     doc,
     ["Changement", "Section"],
     [
-        ["VACUUM parallélisé et ramené à une exécution hebdomadaire", "§6.3"],
-        ["Reprise d'un backup interrompu d'un jour sur l'autre", "§5.3"],
-        ["Archivage automatique des logs de cluster", "§4.6"],
-        ["Cluster du backup quotidien dimensionné en multi-worker", "§5.1"],
-        ["Snapshot hebdomadaire abandonné, rétention quotidienne portée à 30 jours", "§6"],
-        ["Étape VACUUM explicite ajoutée à la politique de rétention", "§6.3"],
-        ["Procédure de validation post-déploiement", "§7"],
-        ["Notebooks de restauration 09, 10 et 11", "§9"],
-        ["Annexe de dépannage des erreurs rencontrées en production", "Annexe A"],
-        ["Authentification OAuth utilisateur pour un déploiement de test", "Annexe B"],
+        ["Sauvegarde et restauration des volumes et fonctions Unity Catalog (définitions, permissions)", "§1.1, §9"],
+        ["Catalogs fédérés et Delta Sharing exclus automatiquement du backup", "§1.2"],
+        ["Mesure du contenu des volumes managés et des catalogs inaccessibles dans l'audit", "§3.1"],
+        ["Rapport de couverture : ce qui est restaurable, et par quel moyen", "§3.4"],
+        ["Driver à mémoire renforcée (Standard_E8s_v3) sur le job quotidien", "§5.1"],
+        ["Ordre de restauration avec l'infrastructure as code ; rejeu des seules permissions", "§9.2"],
+        ["Messages d'erreur sans trace Java, qui tronquaient la sortie des notebooks", "—"],
     ],
     col_widths=[13, 3],
 )
@@ -403,8 +402,15 @@ add_table(
         ["optimize_files_per_gb", "50", "Seuil de fichiers par Go au-delà duquel OPTIMIZE est recommandé"],
         ["optimize_files_min", "100", "Nombre de fichiers minimum, évite les faux positifs sur petites tables"],
         ["output_json", "false", "Sortie JSON complète"],
+        ["measure_volumes", "true", "Mesure du contenu des volumes managés (fichiers, taille, changements sur 24 h)"],
     ],
     col_widths=[5, 2.5, 9],
+)
+
+doc.add_paragraph(
+    "Exécuter l'audit avec l'identité du job de backup (ou un admin du metastore) : sa dernière "
+    "section liste les catalogs que cette identité ne peut pas lire — ils ne seraient pas "
+    "sauvegardés — et, à part, les catalogs fédérés et Delta Sharing, hors périmètre par conception."
 )
 
 add_heading(doc, "3.2 Interpréter le ratio fichiers par Go", 2)
@@ -454,6 +460,36 @@ add_note(
     "l'OPTIMIZE est une opération coûteuse mais qui ne se paie qu'une fois, et qui bénéficie "
     "aussi aux requêtes de production. Le planifier sur un créneau creux, idéalement le "
     "dimanche soir.",
+)
+
+add_heading(doc, "3.4 Rapport de couverture du backup", 2)
+
+doc.add_paragraph(
+    "Le notebook diag_03_backup_coverage.py inventorie tous les objets du metastore (catalogs, "
+    "schémas, tables, volumes, fonctions, modèles, external locations, connexions, partages) et "
+    "du workspace (jobs, pipelines, dossiers), et indique pour chacun s'il est restaurable par le "
+    "backup, par l'infrastructure as code, par un autre moyen, ou pas du tout. Il est en lecture "
+    "seule et produit un rapport HTML et un fichier Excel."
+)
+
+add_table(
+    doc,
+    ["Paramètre", "Rôle"],
+    [
+        ["backup_principal", "Groupe ou service principal du backup : vérifie qu'il a les droits sur chaque objet"],
+        ["iac_identities", "Identités qui déploient l'IaC : les objets qu'elles ont créés sont classés « as code »"],
+        ["iac_file", "Liste optionnelle d'objets gérés en code, un nom complet par ligne"],
+        ["excluded_catalogs", "Catalogs exclus volontairement (tests, bacs à sable)"],
+        ["backup_root", "Racine du backup : contrôle le résultat du dernier backup réel"],
+    ],
+    col_widths=[4, 12],
+)
+
+add_note(
+    doc,
+    "à exécuter avec un compte admin du metastore, qui voit tous les objets. Le rapport est "
+    "conçu pour être présenté tel quel : synthèse par type et par catalog, objets à traiter, "
+    "légende des moyens de restauration.",
 )
 
 doc.add_page_break()
@@ -771,6 +807,13 @@ add_warning(
     "si le nombre de workers est ramené à 0, il faut aussi rétablir les paramètres de cluster "
     "mono-nœud (spark.master en local, profil singleNode, tag ResourceClass). Un cluster "
     "déclaré à 0 worker sans ces paramètres ne démarre pas.",
+)
+
+doc.add_paragraph(
+    "Le driver est dimensionné à part : Standard_E8s_v3 (64 Go). Sa mémoire croît avec le nombre "
+    "de tables traitées dans un même run, pas avec leur volume : sur un Standard_DS4_v2, elle "
+    "saturait vers 4 000 tables (erreur GC overhead limit exceeded), et seule une seconde "
+    "tentative aboutissait. Les workers restent en Standard_DS4_v2."
 )
 
 add_heading(doc, "5.2 Durées attendues", 2)
@@ -1136,6 +1179,25 @@ add_note(
     "schéma cible s'il n'existe pas.",
 )
 
+add_heading(doc, "9.2 Ordre de restauration avec l'infrastructure as code", 2)
+
+doc.add_paragraph(
+    "Le backup reconstitue l'état réel du metastore, y compris des objets que l'infrastructure "
+    "as code (Terraform, bundle) sait aussi recréer. Le code reste la source de vérité : il "
+    "passe en premier, le backup complète."
+)
+
+numbered(doc, "IaC : storage credentials, external locations, connexions, catalogs, volumes, fonctions, pipelines, et grants s'ils sont en code.")
+numbered(doc, "Données : tables Delta (scope tables).")
+numbered(doc, "Compléments : volumes et fonctions créés hors code (scope uc_objects, sans effet sur les objets déjà recréés), puis permissions (scope grants, ou scripts/restore_uc.py --only-grants).")
+
+add_warning(
+    doc,
+    "ne pas inverser : un objet recréé par le backup avant l'apply Terraform n'est pas dans son "
+    "state, et l'apply échoue en « already exists ». Si les grants sont gérés en Terraform de "
+    "façon autoritaire (databricks_grants), ne pas rejouer ceux du backup sur ces objets.",
+)
+
 doc.add_page_break()
 
 
@@ -1267,6 +1329,7 @@ bullet(doc, "Vue, vue matérialisée ou Streaming Table : non clonable par DEEP 
 bullet(doc, "Table dans un format autre que Delta")
 bullet(doc, "Catalog auquel le principal du job n'a pas accès en lecture")
 bullet(doc, "Catalog exclu par conception : hive_metastore, system, samples, information_schema")
+bullet(doc, "Catalog fédéré ou Delta Sharing : exclu par conception, signalé par une ligne [SKIP] dans 01_uc_metadata")
 
 doc.add_paragraph(
     "Le point 3 est le seul réellement problématique et le seul silencieux. C'est la raison "
@@ -1370,6 +1433,6 @@ add_note(
 # ── Écriture ──────────────────────────────────────────────────────────────────
 
 out_dir = os.path.dirname(os.path.abspath(__file__))
-out_path = os.path.join(out_dir, "DR_Backup_Guide_Deploiement_v4.1.docx")
+out_path = os.path.join(out_dir, "DR_Backup_Guide_Deploiement_v4.2.docx")
 doc.save(out_path)
 print(f"[OK] Guide genere : {out_path}")
