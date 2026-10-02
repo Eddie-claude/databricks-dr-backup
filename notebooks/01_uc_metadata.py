@@ -223,11 +223,24 @@ if uc_objects_error is None:
 
 grant_statements = []
 
+# >>> GRANTS DIRECTS
+def _is_direct_grant(g, fqn: str) -> bool:
+    """SHOW GRANTS ON <objet> renvoie aussi les droits hérités du catalog / schéma (ObjectKey du
+    parent). Réécrits « ON <objet> », ils deviendraient des grants explicites à la restauration :
+    un droit retiré plus tard au niveau du catalog subsisterait sur chaque objet. Seuls les
+    grants posés sur l'objet lui-même sont exportés."""
+    key = getattr(g, "ObjectKey", None)
+    if key is None:
+        return True
+    return key.replace("`", "").lower() == fqn.replace("`", "").lower()
+# <<< GRANTS DIRECTS
+
 for catalog in catalogs:
     # Grants catalog
     try:
         for g in spark.sql(f"SHOW GRANTS ON CATALOG `{catalog}`").collect():
-            grant_statements.append(f"GRANT {g.ActionType} ON CATALOG `{catalog}` TO `{g.Principal}`;")
+            if _is_direct_grant(g, f"`{catalog}`"):
+                grant_statements.append(f"GRANT {g.ActionType} ON CATALOG `{catalog}` TO `{g.Principal}`;")
     except Exception as e:
         print(f"[WARN] Grants catalog {catalog}: {_short(e)}")
 
@@ -236,7 +249,8 @@ for catalog in catalogs:
         # Grants schema
         try:
             for g in spark.sql(f"SHOW GRANTS ON SCHEMA `{catalog}`.`{schema}`").collect():
-                grant_statements.append(f"GRANT {g.ActionType} ON SCHEMA `{catalog}`.`{schema}` TO `{g.Principal}`;")
+                if _is_direct_grant(g, f"`{catalog}`.`{schema}`"):
+                    grant_statements.append(f"GRANT {g.ActionType} ON SCHEMA `{catalog}`.`{schema}` TO `{g.Principal}`;")
         except Exception as e:
             print(f"[WARN] Grants schema {catalog}.{schema}: {_short(e)}")
 
@@ -247,7 +261,8 @@ for catalog in catalogs:
             fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
             try:
                 for g in spark.sql(f"SHOW GRANTS ON TABLE {fqn}").collect():
-                    grant_statements.append(f"GRANT {g.ActionType} ON TABLE {fqn} TO `{g.Principal}`;")
+                    if _is_direct_grant(g, fqn):
+                        grant_statements.append(f"GRANT {g.ActionType} ON TABLE {fqn} TO `{g.Principal}`;")
             except Exception as e:
                 print(f"[WARN] Grants table {fqn_plain}: {_short(e)}")
 
@@ -256,7 +271,8 @@ for securable, fqns in (("VOLUME", volume_fqns), ("FUNCTION", function_fqns)):
     for fqn in fqns:
         try:
             for g in spark.sql(f"SHOW GRANTS ON {securable} {fqn}").collect():
-                grant_statements.append(f"GRANT {g.ActionType} ON {securable} {fqn} TO `{g.Principal}`;")
+                if _is_direct_grant(g, fqn):
+                    grant_statements.append(f"GRANT {g.ActionType} ON {securable} {fqn} TO `{g.Principal}`;")
         except Exception as e:
             print(f"[WARN] Grants {securable.lower()} {fqn}: {_short(e)}")
 

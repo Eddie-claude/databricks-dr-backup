@@ -86,6 +86,10 @@ def build_function_ddl(routine: dict, params: list, return_columns: Optional[lis
         lines.append(f"  {access}")
 
     if is_python:
+        # Databricks conserve les sauts de ligne qui entouraient $$…$$ : sans ce nettoyage, chaque
+        # cycle backup → restore ajouterait une ligne vide au début et à la fin du corps.
+        # strip("\r\n") seulement : l'indentation de la première ligne est significative.
+        body = body.strip("\r\n")
         tag = "$$" if "$$" not in body else "$py$"
         lines.append(f"  AS {tag}\n{body}\n{tag}")
     else:

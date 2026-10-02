@@ -190,3 +190,29 @@ def test_information_schema_real_value_formats():
         _routine(is_deterministic="false", sql_data_access="CONTAINS_SQL"), params=[])
     assert "\n  NOT DETERMINISTIC\n" in ddl
     assert "\n  CONTAINS SQL\n" in ddl
+
+
+def test_restore_uc_only_grants_runs_grants_file_alone():
+    from scripts.restore_uc import files_to_run, SQL_FILES_ORDER
+    assert files_to_run(only_grants=True) == ["04_grants.sql"]
+    assert files_to_run(only_grants=False) == SQL_FILES_ORDER
+
+
+def test_python_body_does_not_grow_across_backup_restore_cycles():
+    # Databricks renvoie le corps avec les sauts de ligne qui entouraient $$…$$ (constaté sur dev) :
+    # sans nettoyage, chaque cycle backup → restore ajoute une ligne vide au début et à la fin.
+    stored = "\n# commentaire avec ; et '\nr = s.upper()\nreturn r\n"
+    ddl = build_function_ddl(
+        _routine(routine_body="EXTERNAL", external_language="PYTHON", routine_definition=stored,
+                 sql_data_access="NO SQL"),
+        params=[])
+    assert ddl.endswith("AS $$\n# commentaire avec ; et '\nr = s.upper()\nreturn r\n$$")
+
+
+def test_python_body_keeps_its_indentation():
+    stored = "\n    x = 1\n    return x\n"
+    ddl = build_function_ddl(
+        _routine(routine_body="EXTERNAL", external_language="PYTHON", routine_definition=stored,
+                 sql_data_access="NO SQL"),
+        params=[])
+    assert "AS $$\n    x = 1\n    return x\n$$" in ddl

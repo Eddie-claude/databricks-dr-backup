@@ -346,9 +346,9 @@ ext_locations = _query("External locations", f"SELECT * FROM {IS}.external_locat
 credentials   = _query("Storage credentials", f"SELECT * FROM {IS}.storage_credentials")
 connections   = _query("Connexions", f"SELECT * FROM {IS}.connections")
 
-def _api_objects(label: str, path: str, key: str) -> list:
+def _api_objects(label: str, path: str, key: str, params: dict = None) -> list:
     try:
-        items = api_list(path, key, {"max_results": 1000})
+        items = api_list(path, key, params or {"max_results": 1000})
         print(f"[OK] {label} : {len(items)}")
         return items
     except Exception as e:
@@ -405,10 +405,11 @@ def access(kind: str, cat: str, sch: str = "", name: str = "", owner: str = ""):
 # MAGIC %md ## 4 — Inventaire du workspace (jobs, pipelines, dossiers)
 
 # COMMAND ----------
-jobs = _api_objects("Jobs", "/api/2.1/jobs/list", "jobs")
+# Tailles de page maximales de ces API (au-delà : HTTP 400, constaté sur l'API pipelines)
+jobs = _api_objects("Jobs", "/api/2.1/jobs/list", "jobs", {"limit": 100})
 
 pipelines = []
-for p in _api_objects("Pipelines", "/api/2.0/pipelines", "statuses"):
+for p in _api_objects("Pipelines", "/api/2.0/pipelines", "statuses", {"max_results": 100}):
     try:
         pipelines.append(api_get(f"/api/2.0/pipelines/{p['pipeline_id']}"))
     except Exception as e:
@@ -589,6 +590,105 @@ print(f"[OK] {len(rows)} objets évalués")
 # MAGIC %md ## 6 — Rapport HTML + Excel
 
 # COMMAND ----------
+# >>> XLSX
+# Écriture .xlsx sans dépendance (openpyxl est absent du runtime Databricks, et PyPI peut être
+# inaccessible) : un .xlsx est un zip de XML. En-tête en gras, ligne figée, filtres automatiques.
+import re as _re
+import zipfile
+from xml.sax.saxutils import escape as _xml_escape
+
+_XML_INVALID = _re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _col(n: int) -> str:
+    s = ""
+    n += 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _cell(ref: str, value, style: int = 0) -> str:
+    st = f' s="{style}"' if style else ""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        text = _xml_escape(_XML_INVALID.sub("", str(value)))
+        return f'<c r="{ref}" t="inlineStr"{st}><is><t xml:space="preserve">{text}</t></is></c>'
+    return f'<c r="{ref}"{st}><v>{value}</v></c>'
+
+
+def _sheet_xml(headers: list, rows: list) -> str:
+    widths = [min(60, max([len(str(h))] + [len(str(r[i])) for r in rows if i < len(r) and r[i] is not None]) + 2)
+              for i, h in enumerate(headers)]
+    cols = "".join(f'<col min="{i + 1}" max="{i + 1}" width="{w}" customWidth="1"/>' for i, w in enumerate(widths))
+    data = [f'<row r="1">{"".join(_cell(f"{_col(i)}1", h, 1) for i, h in enumerate(headers))}</row>']
+    for r_idx, row in enumerate(rows, start=2):
+        data.append(f'<row r="{r_idx}">{"".join(_cell(f"{_col(i)}{r_idx}", v) for i, v in enumerate(row))}</row>')
+    last = f"{_col(len(headers) - 1)}{len(rows) + 1}"
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" '
+            'state="frozen"/></sheetView></sheetViews>'
+            f'<cols>{cols}</cols><sheetData>{"".join(data)}</sheetData>'
+            f'<autoFilter ref="A1:{last}"/></worksheet>')
+
+
+def write_xlsx(path: str, sheets: dict) -> None:
+    """sheets = {nom: (en-têtes, lignes)} ; lignes = listes de valeurs (str, nombre, None)."""
+    names = []
+    for name in sheets:
+        clean = _re.sub(r"[\[\]:*?/\\]", "", name)[:31] or "Feuille"
+        names.append(clean)
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="xml" ContentType="application/xml"/>'
+                   '<Override PartName="/xl/workbook.xml" '
+                   'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                   '<Override PartName="/xl/styles.xml" '
+                   'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+                   + "".join(f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" '
+                             'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                             for i in range(len(names)))
+                   + '</Types>')
+        z.writestr("_rels/.rels",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   f'<Relationship Id="rId1" Type="{rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+        z.writestr("xl/workbook.xml",
+                   f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{ns}" xmlns:r="{rel}"><sheets>'
+                   + "".join(f'<sheet name="{_xml_escape(n)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>'
+                             for i, n in enumerate(names))
+                   + "</sheets></workbook>")
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   + "".join(f'<Relationship Id="rId{i + 1}" Type="{rel}/worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
+                             for i in range(len(names)))
+                   + f'<Relationship Id="rId{len(names) + 1}" Type="{rel}/styles" Target="styles.xml"/></Relationships>')
+        z.writestr("xl/styles.xml",
+                   f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="{ns}">'
+                   '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
+                   '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+                   '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+                   '<fill><patternFill patternType="gray125"/></fill></fills>'
+                   '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+                   '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+                   '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+                   '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+                   '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+                   '</styleSheet>')
+        for i, (headers, rows) in enumerate(sheets.values()):
+            z.writestr(f"xl/worksheets/sheet{i + 1}.xml", _sheet_xml(list(headers), [list(r) for r in rows]))
+# <<< XLSX
+
+# COMMAND ----------
 import pandas as pd
 
 df = pd.DataFrame(rows)
@@ -700,19 +800,20 @@ with open(html_path, "w", encoding="utf-8") as f:
     f.write(report_html)
 print(f"[OK] Rapport HTML : {html_path}")
 
-detail = df.drop(columns=["_code"])
-try:
-    xlsx_path = f"{output_dir}/couverture_backup_{stamp}.xlsx"
-    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as xw:
-        summary.rename(columns=lambda c: c if c == "Total" else f"{VERDICTS[c][0]} {VERDICTS[c][1]}") \
-               .to_excel(xw, sheet_name="Synthèse")
-        detail.to_excel(xw, sheet_name="Détail", index=False)
-        to_treat.drop(columns=["_code"]).to_excel(xw, sheet_name="À traiter", index=False)
-    print(f"[OK] Détail Excel : {xlsx_path}")
-except ImportError:
-    csv_path = f"{output_dir}/couverture_backup_{stamp}.csv"
-    detail.to_csv(csv_path, index=False, encoding="utf-8-sig", sep=";")
-    warn(f"openpyxl indisponible : détail écrit en CSV ({csv_path})")
+def _sheet(frame) -> tuple:
+    """(en-têtes, lignes) en types Python natifs (tolist convertit les entiers numpy)."""
+    frame = frame.astype(object).where(pd.notna(frame), None)
+    return [str(c) for c in frame.columns], frame.values.tolist()
+
+synthese = summary.rename(columns=lambda c: c if c == "Total" else f"{VERDICTS[c][0]} {VERDICTS[c][1]}") \
+                  .rename_axis("Type").reset_index()
+xlsx_path = f"{output_dir}/couverture_backup_{stamp}.xlsx"
+write_xlsx(xlsx_path, {
+    "Synthèse":  _sheet(synthese),
+    "Détail":    _sheet(df.drop(columns=["_code"])),
+    "À traiter": _sheet(to_treat.drop(columns=["_code"])),
+})
+print(f"[OK] Détail Excel : {xlsx_path}")
 
 print("Télécharger : Workspace → " + output_dir.replace("/Workspace", "") + " → ⋮ → Download")
 displayHTML(report_html)
