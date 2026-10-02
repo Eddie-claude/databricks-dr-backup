@@ -7,6 +7,7 @@
 #   - Tables nécessitant OPTIMIZE (petits fichiers → backup lent)
 #   - Estimation durée backup J1 et J2+ (incrémental)
 #   - Estimation coût stockage mensuel
+#   - Contenu des volumes managés (fichiers, taille, changements sur 24 h)
 # Aucune écriture, aucune modification — lecture seule.
 
 # COMMAND ----------
@@ -19,6 +20,7 @@
 # MAGIC | `max_parallel` | Threads parallèles pour DESCRIBE DETAIL (8 recommandé) |
 # MAGIC | `optimize_files_thresh` | Seuil fichiers/table au-delà duquel OPTIMIZE est recommandé |
 # MAGIC | `output_json` | Afficher le JSON complet en fin de notebook (debug) |
+# MAGIC | `measure_volumes` | Mesurer le contenu des volumes managés (section 5, `true` par défaut) |
 
 # COMMAND ----------
 import concurrent.futures
@@ -245,3 +247,111 @@ if errors:
 if output_json:
     print("\n[JSON complet — toutes les tables]")
     print(json.dumps(sorted(results, key=lambda r: r.get("size_gb", 0), reverse=True), indent=2))
+
+# COMMAND ----------
+# MAGIC %md ## 5 — Volumes managés (contenu à sauvegarder)
+# MAGIC
+# MAGIC Liste récursivement les fichiers de chaque volume **MANAGED** pour dimensionner leur sauvegarde :
+# MAGIC nombre de fichiers, taille, taille moyenne, fichiers modifiés sur les dernières 24 h.
+# MAGIC Les volumes EXTERNAL sont seulement comptés (leurs fichiers restent sur leur propre stockage).
+# MAGIC
+# MAGIC Lecture seule (`dbutils.fs.ls`). Sur de gros volumes le listing peut prendre plusieurs minutes :
+# MAGIC sa durée (`listing_s`) sert justement à estimer celle du backup. `measure_volumes = false` saute la section.
+
+# COMMAND ----------
+dbutils.widgets.text("measure_volumes", "true", "Mesurer le contenu des volumes managés (true/false)")
+measure_volumes = dbutils.widgets.get("measure_volumes").lower() == "true"
+
+volume_results = []
+external_volumes = []
+
+def list_volume(args: tuple) -> dict:
+    cat, sch, vol = args
+    since_ms = (datetime.now().timestamp() - 24 * 3600) * 1000
+    files = size = recent = recent_size = unreadable = 0
+    dirs, t0 = [f"/Volumes/{cat}/{sch}/{vol}/"], datetime.now()
+    while dirs:
+        d = dirs.pop()
+        try:
+            entries = dbutils.fs.ls(d)
+        except Exception:
+            unreadable += 1
+            continue
+        for f in entries:
+            if f.isDir():
+                dirs.append(f.path)
+            else:
+                files += 1
+                size  += f.size
+                if f.modificationTime >= since_ms:
+                    recent      += 1
+                    recent_size += f.size
+    return {
+        "fqn":            f"{cat}.{sch}.{vol}",
+        "files":          files,
+        "size_gb":        round(size / 1073741824, 3),
+        "avg_mb":         round(size / max(files, 1) / 1048576, 2),
+        "recent_files":   recent,
+        "recent_gb":      round(recent_size / 1073741824, 3),
+        "unreadable_dirs": unreadable,
+        "listing_s":      int((datetime.now() - t0).total_seconds()),
+    }
+
+if measure_volumes:
+    managed = []
+    for cat in catalogs:
+        try:
+            for r in spark.sql(f"""
+                SELECT volume_schema, volume_name, volume_type
+                FROM `{cat}`.information_schema.volumes
+            """).collect():
+                if r.volume_schema in EXCLUDED_SCHEMAS:
+                    continue
+                if r.volume_type == "MANAGED":
+                    managed.append((cat, r.volume_schema, r.volume_name))
+                else:
+                    external_volumes.append(f"{cat}.{r.volume_schema}.{r.volume_name}")
+        except Exception as e:
+            print(f"[WARN] Volumes de {cat} non listables : {e}")
+
+    print(f"[INFO] {len(managed)} volume(s) managé(s), {len(external_volumes)} externe(s) — listing avec {max_parallel} threads...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as ex:
+        volume_results = list(ex.map(list_volume, managed))
+
+    vol_files   = sum(r["files"]        for r in volume_results)
+    vol_size_gb = sum(r["size_gb"]      for r in volume_results)
+    vol_rec_f   = sum(r["recent_files"] for r in volume_results)
+    vol_rec_gb  = sum(r["recent_gb"]    for r in volume_results)
+    vol_unread  = sum(r["unreadable_dirs"] for r in volume_results)
+    # Stockage backup estimé : contenu + 30 jours de changements au rythme des dernières 24 h
+    vol_storage_gb = vol_size_gb + 30 * vol_rec_gb
+
+    print(f"""
+╔══════════════════════════════════════════════════════════════════╗
+║            VOLUMES MANAGÉS — CONTENU                            ║
+╠══════════════════════════════════════════════════════════════════╣
+║    Volumes managés         : {len(volume_results):<5}                           ║
+║    Volumes externes        : {len(external_volumes):<5}  (non concernés)              ║
+║    Fichiers                : {vol_files:>12,}                     ║
+║    Taille totale           : {vol_size_gb:>10.2f} GB                    ║
+║    Modifiés sur 24 h       : {vol_rec_f:>12,} fichiers / {vol_rec_gb:.2f} GB ║
+║    Dossiers illisibles     : {vol_unread:<5}  (droits — à signaler)         ║
+║    Stockage backup estimé  : {vol_storage_gb:>10.2f} GB (contenu + 30 j)     ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+
+    if volume_results:
+        display(spark.createDataFrame(
+            [(r["fqn"], r["files"], r["size_gb"], r["avg_mb"], r["recent_files"],
+              r["recent_gb"], r["unreadable_dirs"], r["listing_s"]) for r in volume_results],
+            "volume STRING, fichiers LONG, taille_gb DOUBLE, taille_moy_mb DOUBLE, "
+            "modifies_24h LONG, modifies_24h_gb DOUBLE, dossiers_illisibles LONG, listing_s LONG",
+        ).orderBy("taille_gb", ascending=False))
+
+    if output_json:
+        print("\n[JSON complet — volumes managés]")
+        print(json.dumps(volume_results, indent=2))
+else:
+    print("[INFO] Mesure des volumes désactivée (measure_volumes=false)")
+
+print(f"[OK] Terminé à {datetime.now().strftime('%H:%M:%S')}")
