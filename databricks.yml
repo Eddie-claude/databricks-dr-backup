@@ -33,6 +33,15 @@ variables:
   log_path:
     description: "Racine d'archivage des logs de cluster. Chemin DBFS obligatoire : cluster_log_conf n'accepte pas d'URI abfss://. Vider cette variable et retirer les blocs cluster_log_conf si le workspace interdit l'accès à DBFS."
     default: "dbfs:/cluster-logs/dr-backup"
+  backup_principal:
+    description: "Groupe (recommandé) ou service principal (Application ID) qui exécute le backup — utilisé par le job dr-backup-grants-sync"
+    default: ""
+  backup_location:
+    description: "Nom de l'External Location du stockage de backup (droits READ FILES / WRITE FILES vérifiés par dr-backup-grants-sync)"
+    default: ""
+  grants_sync_mode:
+    description: "dr-backup-grants-sync : report (constat, échec + notification si écart) ou apply (accorde les droits manquants)"
+    default: "report"
 
 # ── Ressources ────────────────────────────────────────────────────────────────
 resources:
@@ -175,6 +184,48 @@ resources:
             base_parameters:
               backup_root: ${var.backup_root}
               lib_path:    ${var.lib_path}
+          email_notifications:
+            on_failure:
+              - ${var.notification_email}
+
+    # ── Job 4 : Synchronisation des droits du compte de backup (avant le daily) ──
+    # À exécuter avec une identité ADMIN du metastore (celle qui déploie le bundle), pas avec le
+    # compte de backup : un compte sans droit sur un nouveau catalog ne le voit pas.
+    dr_backup_grants_sync:
+      name: dr-backup-grants-sync
+      description: "Vérifie (report) ou accorde (apply) les droits du compte de backup sur chaque catalog standard et sur l'External Location du backup — rattrape les nouveaux catalogs"
+
+      tags:
+        project: databricks-dr
+        managed_by: dab
+
+      schedule:
+        quartz_cron_expression: "0 30 0 * * ?"   # 00:30 UTC, avant le backup de 01:00
+        timezone_id: UTC
+        pause_status: PAUSED
+
+      max_concurrent_runs: 1
+
+      tasks:
+        - task_key: grants_sync
+          new_cluster:
+            spark_version: "17.3.x-scala2.13"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            data_security_mode: "SINGLE_USER"
+            spark_conf:
+              spark.master: "local[*, 4]"
+              spark.databricks.cluster.profile: "singleNode"
+            custom_tags:
+              ResourceClass: "SingleNode"
+          timeout_seconds: 1800
+          notebook_task:
+            notebook_path: ./notebooks/admin_sync_backup_grants.py
+            base_parameters:
+              backup_principal:  ${var.backup_principal}
+              backup_location:   ${var.backup_location}
+              excluded_catalogs: ""
+              mode:              ${var.grants_sync_mode}
           email_notifications:
             on_failure:
               - ${var.notification_email}
