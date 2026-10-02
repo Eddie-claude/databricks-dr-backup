@@ -66,6 +66,14 @@ resources:
             # sinon le cluster ne démarre pas.
             spark_version: "17.3.x-scala2.13"
             node_type_id: "Standard_DS4_v2"
+            # Driver à mémoire renforcée (64 Go, ~40 Go de heap JVM contre 16,8 Go sur DS4_v2).
+            # La mémoire du driver croît avec le NOMBRE de tables traitées dans le run (état Delta
+            # conservé par table, même sautée), pas avec leur taille : sur DS4_v2, le heap saturait
+            # vers ~4000 tables (GC overhead limit exceeded chaque jour, seule la 2e tentative,
+            # repartie d'un driver neuf avec le reste du checkpoint, aboutissait). Contournement de
+            # capacité, en attendant une correction de fond dans 02_data_clone.
+            # À surveiller : Metrics → Driver → JVM heap usage, pic à comparer au plafond.
+            driver_node_type_id: "Standard_E8s_v3"
             num_workers: 4
             data_security_mode: "SINGLE_USER"
             # Les logs du driver disparaissent avec le cluster du job. Archivés ici, ils restent
