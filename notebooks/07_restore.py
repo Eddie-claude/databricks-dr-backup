@@ -33,6 +33,8 @@ dbutils.widgets.text(     "restore_point",  "", "Point de restauration : timesta
 dbutils.widgets.text(     "target_catalog", "", "Catalog cible (vide = même que la source)")
 dbutils.widgets.text(     "target_schema",  "", "Schema cible (vide = même que la source)")
 dbutils.widgets.dropdown( "dry_run",        "true", ["true", "false"], "Dry-run (true = simulation)")
+dbutils.widgets.dropdown( "include_stale",  "false", ["false", "true"],
+                          "Inclure les tables NON sauvegardées à la date de référence (données périmées)")
 
 backup_root    = dbutils.widgets.get("backup_root").rstrip("/")
 restore_level  = dbutils.widgets.get("restore_level")
@@ -41,6 +43,7 @@ restore_point  = dbutils.widgets.get("restore_point").strip()
 target_catalog = dbutils.widgets.get("target_catalog").strip()
 target_schema  = dbutils.widgets.get("target_schema").strip()
 dry_run        = dbutils.widgets.get("dry_run").lower() == "true"
+include_stale  = dbutils.widgets.get("include_stale").lower() == "true"
 
 print(f"[OK] backup_root    = {backup_root}")
 print(f"[OK] restore_level  = {restore_level}")
@@ -116,6 +119,59 @@ else:  # monthly
     scan_root = f"{monthly_root}/{restore_point}"
 
 all_backup_tables = list_tables_in_backup(scan_root)
+
+# >>> REGLES RESTORE
+def pick_manifest_date(dates: list, restore_point: str):
+    """Date du manifest de clone de référence : le dernier, ou le dernier au plus tard le jour
+    du point de restauration ; None si aucun."""
+    limit = restore_point[:10] if restore_point else None
+    eligible = sorted(d for d in dates if limit is None or d <= limit)
+    return eligible[-1] if eligible else None
+
+
+def select_restorable(tables: list, manifest: list) -> tuple:
+    """(tables sauvegardées avec succès à la date de référence, tables périmées avec leur raison).
+    incremental/ garde le dossier d'une table clonée un jour puis en erreur, non clonable ou
+    supprimée : la restaurer ramènerait des données d'une date antérieure, sans le dire."""
+    status = {r["table"]: r.get("status") for r in manifest}
+    selected, stale = [], []
+    for t in tables:
+        st = status.get(f"{t['catalog']}.{t['schema']}.{t['table']}")
+        if st == "success":
+            selected.append(t)
+        else:
+            stale.append({**t, "reason": f"{st} dans le manifest" if st else "absente du manifest"})
+    return selected, stale
+# <<< REGLES RESTORE
+
+
+stale_tables, reference_date = [], None
+if restore_level == "incremental":
+    manifests_dir = f"{incremental_root}/_manifests"
+    try:
+        manifest_dates = [f.name[:-len(".json")] for f in dbutils.fs.ls(manifests_dir)
+                          if re.match(r"^\d{4}-\d{2}-\d{2}\.json$", f.name)]
+    except Exception:
+        manifest_dates = []
+    reference_date = pick_manifest_date(manifest_dates, restore_point)
+    if reference_date is None:
+        print("[WARN] Aucun manifest de clone pour ce point de restauration — sélection sur les dossiers "
+              "présents dans incremental/ (certaines tables peuvent dater d'un backup antérieur)")
+    else:
+        manifest = [r.asDict() for r in spark.read.option("multiLine", True)
+                    .json(f"{manifests_dir}/{reference_date}.json").select("table", "status").collect()]
+        selected, stale_tables = select_restorable(all_backup_tables, manifest)
+        print(f"[OK] Manifest de référence : {reference_date} — {len(selected)} table(s) sauvegardée(s), "
+              f"{len(stale_tables)} dossier(s) sans sauvegarde ce jour-là")
+        for t in stale_tables[:30]:
+            print(f"  [PÉRIMÉE] {t['catalog']}.{t['schema']}.{t['table']} ({t['reason']})")
+        if len(stale_tables) > 30:
+            print(f"  ... et {len(stale_tables) - 30} autres")
+        if include_stale:
+            print("[WARN] include_stale = true : ces tables seront restaurées dans l'état de leur dernier "
+                  "backup réussi, antérieur à la date de référence")
+        else:
+            all_backup_tables = selected
 
 print(f"\n── {len(all_backup_tables)} tables disponibles dans [{restore_level}] ──")
 for t in all_backup_tables[:30]:
@@ -280,6 +336,9 @@ summary = {
     "restore_level":  restore_level,
     "restore_point":  restore_point,
     "tables_count":   len(tables_to_restore),
+    "reference_date": reference_date,
+    "stale_count":    len(stale_tables),
+    "stale_included": include_stale,
     "ok":             ok_count,
     "errors":         error_count,
     "dry_run":        dry_run,
