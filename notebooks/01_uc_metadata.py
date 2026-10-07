@@ -56,11 +56,14 @@ sys.path.insert(0, lib_path)
 # Étape critique du backup : un lib/ pas encore redéployé ne doit pas la faire échouer,
 # seul l'export volumes/fonctions est alors sauté (signalé dans le résultat).
 try:
-    from uc_ddl import build_function_ddl, build_volume_ddl
+    from uc_ddl import build_catalog_ddl, build_function_ddl, build_volume_ddl, qualify_create_name
     uc_objects_error = None
 except ImportError as e:
     uc_objects_error = f"lib/uc_ddl.py introuvable dans {lib_path} : {e}"
     print(f"[WARN] {uc_objects_error} — volumes et fonctions NON sauvegardés")
+    # Formes historiques, sans emplacement ni catalogue dans le nom des vues
+    build_catalog_ddl = lambda name, storage_root, comment: f"CREATE CATALOG IF NOT EXISTS `{name}`;"
+    qualify_create_name = lambda ddl, catalog, schema, name: ddl
 
 assert backup_root.startswith("abfss://"), "backup_root doit commencer par abfss://"
 
@@ -83,32 +86,37 @@ def _split_backup_catalogs(names: list, types: dict) -> tuple:
     skipped = {n: types[n] for n in names if types.get(n) in NON_BACKUP_CATALOG_TYPES}
     return [n for n in names if n not in skipped], skipped
 
-def _catalog_types() -> dict:
-    """{nom: catalog_type} via l'API Unity Catalog ; {} si elle est indisponible."""
+def _catalog_infos() -> dict:
+    """{nom: définition du catalogue} via l'API Unity Catalog ; {} si elle est indisponible.
+    Donne le type (absent d'information_schema) et l'emplacement géré (storage_root)."""
     import requests
     ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
     url = f"{ctx.apiUrl().get()}/api/2.1/unity-catalog/catalogs"
     headers = {"Authorization": f"Bearer {ctx.apiToken().get()}"}
-    types, params = {}, {"max_results": 1000}
+    infos, params = {}, {"max_results": 1000}
     try:
         while True:
             r = requests.get(url, headers=headers, params=params, timeout=30)
             r.raise_for_status()
             d = r.json()
-            types.update({c["name"]: c.get("catalog_type", "") for c in d.get("catalogs", [])})
+            infos.update({c["name"]: c for c in d.get("catalogs", [])})
             if not d.get("next_page_token"):
-                return types
+                return infos
             params["page_token"] = d["next_page_token"]
     except Exception as e:
         print(f"[WARN] Types de catalog indisponibles (API Unity Catalog), catalogs fédérés / "
               f"Delta Sharing non filtrés : {str(e)[:200]}")
-        return types
+        return infos
 
 _visible = [r.catalog for r in spark.sql("SHOW CATALOGS").collect() if r.catalog not in ("hive_metastore", "system", "samples")]
-catalogs, skipped_catalogs = _split_backup_catalogs(_visible, _catalog_types())
+_infos = _catalog_infos()
+catalogs, skipped_catalogs = _split_backup_catalogs(
+    _visible, {n: i.get("catalog_type", "") for n, i in _infos.items()})
 for _c, _t in sorted(skipped_catalogs.items()):
     print(f"[SKIP] Catalog {_c} ({_t}) non sauvegardé : définition à gérer en IaC")
-catalog_ddl = "\n".join([f"CREATE CATALOG IF NOT EXISTS `{c}`;" for c in catalogs])
+# Avec MANAGED LOCATION : sans lui, la recréation échoue sur un metastore sans stockage racine
+catalog_ddl = "\n".join(build_catalog_ddl(c, _infos.get(c, {}).get("storage_root"),
+                                           _infos.get(c, {}).get("comment")) for c in catalogs)
 
 _uc_put(f"{output_path}/01_catalogs.sql", catalog_ddl)
 print(f"[01_catalogs] {len(catalogs)} catalogs exportés : {catalogs}")
@@ -146,7 +154,7 @@ for catalog in catalogs:
             fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
             try:
                 ddl_row = spark.sql(f"SHOW CREATE TABLE {fqn}").collect()[0][0]
-                table_ddls.append(ddl_row + ";")
+                table_ddls.append(qualify_create_name(ddl_row, catalog, schema, t.tableName) + ";")
                 # Ajouter à la liste de clone uniquement si c'est une table réelle
                 if cloneable_tables is None or t.tableName in cloneable_tables:
                     table_names.append(f"{catalog}.{schema}.{t.tableName}")

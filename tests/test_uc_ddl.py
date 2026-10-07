@@ -216,3 +216,46 @@ def test_python_body_keeps_its_indentation():
                  sql_data_access="NO SQL"),
         params=[])
     assert "AS $$\n    x = 1\n    return x\n$$" in ddl
+
+
+# ── Catalogues ───────────────────────────────────────────────────────────
+
+from lib.uc_ddl import build_catalog_ddl, qualify_create_name
+
+
+def test_catalog_ddl_keeps_its_managed_location():
+    # Sur un metastore sans stockage racine, CREATE CATALOG sans MANAGED LOCATION échoue
+    ddl = build_catalog_ddl("finance", "abfss://c@a.dfs.core.windows.net/cat/finance", "Données d'Alice")
+    assert ddl == ("CREATE CATALOG IF NOT EXISTS `finance` MANAGED LOCATION "
+                   "'abfss://c@a.dfs.core.windows.net/cat/finance' COMMENT 'Données d\\'Alice';")
+
+
+def test_catalog_ddl_on_metastore_root_has_no_location():
+    assert build_catalog_ddl("finance", None, None) == "CREATE CATALOG IF NOT EXISTS `finance`;"
+
+
+# ── Nom qualifié des vues ────────────────────────────────────────────────
+
+def test_view_ddl_gets_its_catalog():
+    # SHOW CREATE TABLE renvoie « CREATE VIEW schema.vue » : rejouée ailleurs, la vue
+    # atterrissait dans le catalogue courant
+    ddl = "CREATE VIEW finance.v_ca (\n  region,\n  ca)\nAS SELECT 1"
+    assert qualify_create_name(ddl, "dr", "finance", "v_ca") == \
+        "CREATE VIEW `dr`.`finance`.`v_ca` (\n  region,\n  ca)\nAS SELECT 1"
+
+
+def test_table_ddl_already_qualified_is_normalised():
+    ddl = "CREATE TABLE dr.finance.clients (\n  id INT)\nUSING delta"
+    assert qualify_create_name(ddl, "dr", "finance", "clients").startswith(
+        "CREATE TABLE `dr`.`finance`.`clients` (")
+
+
+def test_qualify_handles_backticks_and_or_replace():
+    ddl = "CREATE OR REPLACE MATERIALIZED VIEW `fin ance`.`v-1` AS SELECT 1"
+    assert qualify_create_name(ddl, "c", "fin ance", "v-1") == \
+        "CREATE OR REPLACE MATERIALIZED VIEW `c`.`fin ance`.`v-1` AS SELECT 1"
+
+
+def test_qualify_leaves_unrecognised_ddl_untouched():
+    assert qualify_create_name("ALTER TABLE x SET TBLPROPERTIES ()", "c", "s", "x") == \
+        "ALTER TABLE x SET TBLPROPERTIES ()"

@@ -23,6 +23,34 @@ def _by_position(rows: list) -> list:
     return sorted(rows, key=lambda r: r["ordinal_position"])
 
 
+# ── Catalogues ───────────────────────────────────────────────────────────
+
+def build_catalog_ddl(name: str, storage_root: Optional[str], comment: Optional[str]) -> str:
+    """CREATE CATALOG avec son emplacement géré : sur un metastore sans stockage racine, un
+    CREATE CATALOG sans MANAGED LOCATION échoue (« Metastore storage root URL does not exist »).
+    storage_root vide = catalogue stocké à la racine du metastore."""
+    ddl = f"CREATE CATALOG IF NOT EXISTS `{name}`"
+    if storage_root:
+        ddl += f" MANAGED LOCATION {sql_string(storage_root)}"
+    if comment:
+        ddl += f" COMMENT {sql_string(comment)}"
+    return ddl + ";"
+
+
+# Nom de l'objet créé, qualifié ou non, avec ou sans backticks
+_CREATE_NAME = re.compile(
+    r"^(\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMPORARY\s+)?(?:MATERIALIZED\s+|STREAMING\s+)?"
+    r"(?:VIEW|TABLE)\s+(?:IF\s+NOT\s+EXISTS\s+)?)"
+    r"(?:`[^`]+`|[\w$]+)(?:\.(?:`[^`]+`|[\w$]+)){0,2}",
+    re.IGNORECASE)
+
+
+def qualify_create_name(ddl: str, catalog: str, schema: str, name: str) -> str:
+    """Remplace le nom de l'objet créé par catalog.schema.nom : SHOW CREATE TABLE renvoie les vues
+    sous la forme « schema.vue », que la restauration créait dans le catalogue courant."""
+    return _CREATE_NAME.sub(lambda m: m.group(1) + _fqn(catalog, schema, name), ddl, count=1)
+
+
 # ── Volumes ──────────────────────────────────────────────────────────────
 
 def build_volume_ddl(volume: dict) -> str:
