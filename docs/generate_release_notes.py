@@ -190,6 +190,18 @@ doc.add_paragraph(
     "de sauvegarde et de restauration. Il est désormais restauré à l'identique."
 )
 
+add_heading(doc, "2.7 Emplacement du dossier lib/", 2)
+
+doc.add_paragraph(
+    "Les jobs cherchaient les modules partagés dans un chemin fixe, la variable lib_path de "
+    "databricks.yml, alors que databricks bundle deploy dépose lib/ dans le dossier du bundle. "
+    "Si ce chemin pointait vers une copie ancienne ou absente, la sauvegarde des volumes et "
+    "fonctions était sautée (simple avertissement) et les restaurations qui utilisent lib/ "
+    "échouaient. Les jobs utilisent désormais le lib/ déployé par le bundle, toujours à jour "
+    "avec les notebooks, et un notebook lancé à la main trouve le lib/ situé à côté de lui. "
+    "La variable lib_path disparaît."
+)
+
 doc.add_page_break()
 
 
@@ -310,8 +322,11 @@ doc.add_page_break()
 
 add_heading(doc, "4. Procédure de mise à jour", 1)
 
-numbered(doc, "Extraire l'archive, en conservant le dossier lib/ : 01_uc_metadata et 12_restore_uc_objects en dépendent.")
+numbered(doc, "Extraire l'archive, en conservant le dossier lib/ : la plupart des notebooks en dépendent (seuls 07_restore et 11_restore_grants sont autonomes).")
 numbered(doc, "Reporter dans databricks.yml vos valeurs (backup_root, host de chaque cible, notification_email, rétentions) et le nouveau bloc driver_node_type_id du job quotidien.")
+numbered(doc, "Dans votre databricks.yml : supprimer la variable lib_path (bloc variables et cibles), "
+              "remplacer ${var.lib_path} par ${workspace.file_path}/lib dans les paramètres des jobs, "
+              "et ajouter lib_path: ${workspace.file_path}/lib aux paramètres du job dr-backup-monthly.")
 numbered(doc, "Vérifier que le quota de vCPU de la famille ESv3 permet 8 vCPU supplémentaires dans la région, et qu'aucune politique de cluster n'interdit Standard_E8s_v3.")
 numbered(doc, "databricks bundle validate --target <cible> — vérifier les lignes Host: et User:.")
 numbered(doc, "databricks bundle deploy --target <cible>.")
@@ -325,8 +340,9 @@ add_warning(
 
 add_note(
     doc,
-    "si lib/ n'est pas redéployé, le backup ne s'arrête pas : seule la sauvegarde des volumes et "
-    "fonctions est sautée, avec un avertissement dans la sortie de 01_uc_metadata.",
+    "lib/ est déployé par databricks bundle deploy avec les notebooks : aucun chemin à "
+    "renseigner. Une copie de lib/ faite à la main dans le workspace n'est plus utilisée et "
+    "peut être supprimée.",
 )
 
 add_heading(doc, "4.1 Vérification après mise à jour", 2)
@@ -334,6 +350,7 @@ add_heading(doc, "4.1 Vérification après mise à jour", 2)
 bullet(doc, "Statut du run : réussi dès la première tentative.")
 bullet(doc, "Metrics du driver : pic de JVM heap usage nettement sous 40 Go, pauses GC basses.")
 bullet(doc, "Dossier uc_metadata/ du jour : présence de 05_volumes.sql et 06_functions.sql.")
+bullet(doc, "Sortie de 01_uc_metadata : aucun avertissement « lib/uc_ddl.py introuvable ».")
 bullet(doc, "Sortie de 01_uc_metadata : les lignes [SKIP] correspondent bien à vos catalogs fédérés.")
 
 add_note(

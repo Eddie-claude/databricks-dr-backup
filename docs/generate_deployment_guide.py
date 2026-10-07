@@ -86,6 +86,7 @@ add_table(
         ["Synchronisation automatique des droits du compte de backup (job dr-backup-grants-sync)", "§2.5"],
         ["Ordre de restauration avec l'infrastructure as code ; rejeu des seules permissions", "§9.2"],
         ["Messages d'erreur sans trace Java, qui tronquaient la sortie des notebooks", "—"],
+        ["Dossier lib/ trouvé automatiquement : la variable lib_path disparaît", "§4.1, §4.2"],
     ],
     col_widths=[13, 3],
 )
@@ -527,15 +528,17 @@ add_code(
 
 add_warning(
     doc,
-    "le dossier lib/ est indispensable : les notebooks 01, 03, 04 et 12 en dépendent. Une extraction "
-    "partielle de l'archive provoque un échec de l'étape de rapport, et le backup des volumes "
-    "et fonctions est sauté (avertissement dans la sortie de 01_uc_metadata).",
+    "le dossier lib/ est indispensable : la plupart des notebooks en dépendent (seuls 07_restore et "
+    "11_restore_grants sont autonomes). Le bundle le déploie à côté des notebooks et les jobs le "
+    "trouvent automatiquement : aucun chemin à renseigner. Une extraction partielle de l'archive "
+    "provoque un échec de l'étape de rapport, et le backup des volumes et fonctions est sauté "
+    "(avertissement dans la sortie de 01_uc_metadata).",
 )
 
 add_heading(doc, "4.2 Adapter databricks.yml", 2)
 
 doc.add_paragraph(
-    "Quatre valeurs sont à adapter à l'environnement cible. Tout le reste peut rester en "
+    "Trois valeurs sont à adapter à l'environnement cible. Tout le reste peut rester en "
     "configuration par défaut."
 )
 
@@ -544,7 +547,6 @@ add_table(
     ["Variable", "Valeur à renseigner"],
     [
         ["backup_root", "abfss://<container>@<compte>.dfs.core.windows.net/backup"],
-        ["lib_path", "Chemin workspace du dossier lib/ après déploiement"],
         ["notification_email", "Adresse destinataire des alertes d'échec"],
         ["workspace.host (par cible)", "URL du workspace Databricks"],
     ],
