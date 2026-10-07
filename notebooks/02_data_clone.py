@@ -145,6 +145,19 @@ def should_flush(pending: int, last_flush: float, now: float, every: int = 50, m
 def _short(e) -> str:
     """Message d'erreur sans la stacktrace JVM, borné : il est stocké dans le checkpoint et le manifest."""
     return " ".join(str(e).split("JVM stacktrace:")[0].split())[:2000]
+
+
+NON_CLONABLE_REASON = ("non clonable : données NON sauvegardées (format non Delta, filtre de lignes "
+                       "ou masque de colonnes, vue)")
+
+
+def clone_failure(err: str) -> dict:
+    """Statut d'un DEEP CLONE refusé. Une source non clonable est « skipped » (limite connue, pas
+    une panne) mais garde son message : une table à filtre de lignes arrivait ici avec la raison
+    « vue ou format non cloneable », sans que rien ne dise que ses données manquaient."""
+    if "DELTA_CLONE_UNSUPPORTED_SOURCE" in err or "format is View" in err:
+        return {"status": "skipped", "reason": NON_CLONABLE_REASON, "error": err}
+    return {"status": "error", "error": err}
 # <<< REGLES CLONE
 
 _checkpoint_lock    = threading.Lock()
@@ -359,21 +372,10 @@ def clone_one(args: tuple) -> dict:
     except Exception as e:
         elapsed = time.time() - t0
         err_str = _short(e)
-        if "DELTA_CLONE_UNSUPPORTED_SOURCE" in err_str or "format is View" in err_str:
-            entry = {
-                "table":      fqn,
-                "status":     "skipped",
-                "reason":     "vue ou format non cloneable",
-                "duration_s": round(elapsed, 1),
-            }
-            print(f"  [SKIP] {fqn}")
+        entry = {"table": fqn, **clone_failure(err_str), "duration_s": round(elapsed, 1)}
+        if entry["status"] == "skipped":
+            print(f"  [SKIP] {fqn} — {NON_CLONABLE_REASON} — {err_str[:300]}")
         else:
-            entry = {
-                "table":      fqn,
-                "status":     "error",
-                "error":      err_str,
-                "duration_s": round(elapsed, 1),
-            }
             print(f"  ✗ ERREUR {fqn} — {err_str[:500]}")
 
     save_checkpoint(fqn, entry)
@@ -409,16 +411,17 @@ print(f"""
 ╠══════════════════════════════════════════╣
 ║  Succès          : {success_count:<21} ║
 ║    dont sans DEEP CLONE (version inchangée) : {version_skip_count:<3} ║
-║  Ignorées (vues) : {skip_count:<21} ║
+║  Non clonables   : {skip_count:<21} ║
 ║  Erreurs         : {error_count:<21} ║
 ║  Volume          : {total_size_gb:<17.2f} GB ║
 ╚══════════════════════════════════════════╝
 """)
 
-if error_count > 0:
-    print("[Tables en erreur]")
-    for r in clone_results:
-        if r["status"] == "error":
+for status, title in (("error", "Tables en erreur"), ("skipped", "Tables non clonables (données NON sauvegardées)")):
+    rows = [r for r in clone_results if r["status"] == status]
+    if rows:
+        print(f"[{title}]")
+        for r in rows:
             print(f"  - {r['table']}: {r.get('error', '?')[:120]}")
 
 # COMMAND ----------

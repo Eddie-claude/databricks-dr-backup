@@ -24,11 +24,35 @@
   <h2>Statistiques</h2>
   <table>
     <tr><th>Asset</th><th>Total</th></tr>
-    <tr><td>Tables Delta</td><td>{{ stats.total_tables }}</td></tr>
+    <tr><td>Tables découvertes</td><td>{{ stats.total_tables }}</td></tr>
+    {% if stats.tables_saved is defined %}
+    <tr><td>Tables sauvegardées</td><td>{{ stats.tables_saved }}</td></tr>
+    <tr><td>Tables non clonables (données non sauvegardées)</td>
+        <td class="{{ 'error' if stats.tables_skipped else '' }}">{{ stats.tables_skipped }}</td></tr>
+    <tr><td>Tables en erreur</td>
+        <td class="{{ 'error' if stats.tables_error else '' }}">{{ stats.tables_error }}</td></tr>
+    {% endif %}
     <tr><td>Jobs</td><td>{{ stats.total_jobs }}</td></tr>
     <tr><td>Notebooks</td><td>{{ stats.total_notebooks }}</td></tr>
     <tr><td>Volume données</td><td>{{ stats.data_size_gb }} GB</td></tr>
   </table>
+
+  {% if non_saved %}
+  <h2>Tables non sauvegardées ({{ non_saved_total }})</h2>
+  <p>Ces tables ne sont pas dans le backup : la restauration ne pourra pas les recréer.
+  {% if non_saved_total > non_saved | length %}Liste limitée aux {{ non_saved | length }} premières ;
+  le détail complet est dans le manifest de clone du jour.{% endif %}</p>
+  <table>
+    <tr><th>Table</th><th>Statut</th><th>Cause</th></tr>
+    {% for t in non_saved %}
+    <tr>
+      <td>{{ t.table }}</td>
+      <td class="error">{{ t.status }}</td>
+      <td>{{ t.error | default(t.reason | default('')) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 
   <h2>Étapes</h2>
   <table>

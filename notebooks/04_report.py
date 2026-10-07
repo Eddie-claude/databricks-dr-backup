@@ -41,12 +41,21 @@ stats = json.loads(dbutils.widgets.get("stats_json"))
 steps = json.loads(dbutils.widgets.get("steps_json"))
 
 sys.path.insert(0, lib_path)
-from report import generate_report
+from report import generate_report, non_saved_tables
+
+# Tables sans copie réussie, lues dans le manifest de clone du jour (trop volumineux pour un widget)
+clone_manifest_path = f"{backup_root}/incremental/_manifests/{backup_date}.json"
+try:
+    non_saved = non_saved_tables(json.loads(dbutils.fs.head(clone_manifest_path, 10_000_000)))
+    print(f"[OK] {len(non_saved)} table(s) non sauvegardée(s) d'après {clone_manifest_path}")
+except Exception as e:
+    print(f"[WARN] Manifest de clone illisible ({e}) : liste des tables non sauvegardées absente du rapport")
+    non_saved = []
 
 # COMMAND ----------
 # DBTITLE 1, Générer le rapport HTML
 
-html = generate_report(diff=diff, stats=stats, steps=steps)
+html = generate_report(diff=diff, stats=stats, steps=steps, non_saved=non_saved)
 report_path = f"{backup_root}/{backup_date}/report/dr_report_{backup_date}.html"
 dbutils.fs.put(report_path, html, overwrite=True)
 print(f"[OK] Rapport écrit : {report_path}")

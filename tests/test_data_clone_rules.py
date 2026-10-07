@@ -23,3 +23,23 @@ def test_error_message_drops_jvm_stacktrace_and_is_bounded():
     err = Exception("[DELTA_X] boom\nUser does not have SELECT.\n\nJVM stacktrace:\norg.apache\n\tat x" + "y" * 5000)
     assert short(err) == "[DELTA_X] boom User does not have SELECT."
     assert len(short(Exception("z" * 5000))) == 2000
+
+
+# ── DEEP CLONE refusé ────────────────────────────────────────────────────
+
+clone_failure = NS["clone_failure"]
+
+
+def test_unsupported_source_is_skipped_but_keeps_its_error_and_says_data_not_saved():
+    # Une table à filtre de lignes arrivait ici avec la raison « vue ou format non cloneable » :
+    # ses données n'étaient pas sauvegardées, sans que rien ne le dise.
+    err = "[DELTA_CLONE_UNSUPPORTED_SOURCE] Unsupported clone source 'c.rh.salaires'"
+    entry = clone_failure(err)
+    assert entry["status"] == "skipped"
+    assert entry["error"] == err
+    assert "NON sauvegardées" in entry["reason"]
+
+
+def test_other_failures_are_errors():
+    assert clone_failure("[PERMISSION_DENIED] User does not have SELECT") == {
+        "status": "error", "error": "[PERMISSION_DENIED] User does not have SELECT"}

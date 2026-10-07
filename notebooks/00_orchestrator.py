@@ -107,6 +107,10 @@ clone_result = run_step("data_clone", "./02_data_clone", {
     "retain_daily":       retain_daily,
     "max_parallel":       max_parallel,
 }, critical=True)
+# Une table en erreur n'est pas dans le backup : le run ne peut pas être « success »
+if clone_result.get("error_count"):
+    global_status = "degraded"
+    print(f"[WARN] {clone_result['error_count']} table(s) en erreur de clone — statut dégradé")
 
 # COMMAND ----------
 # DBTITLE 1, Étape 2b — Fichiers des volumes managés (non critique)
@@ -232,6 +236,10 @@ stats = {
     "total_notebooks": len(current_manifest.get("notebooks", [])),
     "data_size_gb": clone_result.get("total_size_gb", 0),
 }
+if "success_count" in clone_result:
+    stats.update(tables_saved=clone_result["success_count"],
+                 tables_skipped=clone_result.get("skip_count", 0),
+                 tables_error=clone_result.get("error_count", 0))
 
 run_step("report", "./04_report", {
     **base_params,
