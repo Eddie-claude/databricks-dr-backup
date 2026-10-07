@@ -322,11 +322,12 @@ doc.add_page_break()
 
 add_heading(doc, "4. Procédure de mise à jour", 1)
 
-numbered(doc, "Extraire l'archive, en conservant le dossier lib/ : la plupart des notebooks en dépendent (seuls 07_restore et 11_restore_grants sont autonomes).")
-numbered(doc, "Reporter dans databricks.yml vos valeurs (backup_root, host de chaque cible, notification_email, rétentions) et le nouveau bloc driver_node_type_id du job quotidien.")
-numbered(doc, "Dans votre databricks.yml : supprimer la variable lib_path (bloc variables et cibles), "
-              "remplacer ${var.lib_path} par ${workspace.file_path}/lib dans les paramètres des jobs, "
-              "et ajouter lib_path: ${workspace.file_path}/lib aux paramètres du job dr-backup-monthly.")
+numbered(doc, "Extraire l'archive, en conservant le dossier lib/ : les notebooks d'export (01, 03, 04, 14) et de restauration (08, 09, 12, 13, 15) en dépendent.")
+numbered(doc, "Reporter dans votre databricks.yml vos valeurs (backup_root, host de chaque cible, notification_email, rétentions) et le nouveau bloc driver_node_type_id du job quotidien.")
+numbered(doc, "Toujours dans votre databricks.yml : supprimer la variable lib_path (bloc variables et "
+              "cibles), remplacer ${var.lib_path} par ${workspace.file_path}/lib dans les paramètres "
+              "des jobs, et ajouter lib_path: ${workspace.file_path}/lib aux paramètres du job "
+              "dr-backup-monthly (sans effet dans cette version, requis par la suivante).")
 numbered(doc, "Vérifier que le quota de vCPU de la famille ESv3 permet 8 vCPU supplémentaires dans la région, et qu'aucune politique de cluster n'interdit Standard_E8s_v3.")
 numbered(doc, "databricks bundle validate --target <cible> — vérifier les lignes Host: et User:.")
 numbered(doc, "databricks bundle deploy --target <cible>.")
@@ -341,8 +342,17 @@ add_warning(
 add_note(
     doc,
     "lib/ est déployé par databricks bundle deploy avec les notebooks : aucun chemin à "
-    "renseigner. Une copie de lib/ faite à la main dans le workspace n'est plus utilisée et "
-    "peut être supprimée.",
+    "renseigner. Un notebook cherche lib/ dans le dossier voisin du sien : ouvrir les notebooks "
+    "depuis le dossier du bundle (…/.bundle/dr-backup/<cible>/files/notebooks). Si vous gardez "
+    "une copie des notebooks ailleurs dans le workspace, gardez lib/ à jour à côté d'elle.",
+)
+
+add_note(
+    doc,
+    "le premier run après la mise à jour peut être nettement plus long : il exporte pour la "
+    "première fois les volumes et fonctions, et réalise la copie initiale complète des fichiers "
+    "des volumes managés. Les runs suivants ne copient que les fichiers modifiés. Le lancer "
+    "manuellement et en suivre la durée avant de réactiver la planification.",
 )
 
 add_heading(doc, "4.1 Vérification après mise à jour", 2)

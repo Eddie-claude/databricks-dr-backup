@@ -528,11 +528,12 @@ add_code(
 
 add_warning(
     doc,
-    "le dossier lib/ est indispensable : la plupart des notebooks en dépendent (seuls 07_restore et "
-    "11_restore_grants sont autonomes). Le bundle le déploie à côté des notebooks et les jobs le "
-    "trouvent automatiquement : aucun chemin à renseigner. Une extraction partielle de l'archive "
-    "provoque un échec de l'étape de rapport, et le backup des volumes et fonctions est sauté "
-    "(avertissement dans la sortie de 01_uc_metadata).",
+    "le dossier lib/ est indispensable : les notebooks d'export (01, 03, 04, 14) et de "
+    "restauration (08, 09, 12, 13, 15) en dépendent. Le bundle le déploie à côté des notebooks et "
+    "les jobs le trouvent automatiquement : aucun chemin à renseigner. Une extraction partielle de "
+    "l'archive fait échouer le diff, le rapport et la copie des fichiers des volumes, et le backup "
+    "des définitions de volumes et fonctions est sauté (avertissement dans la sortie de "
+    "01_uc_metadata).",
 )
 
 add_heading(doc, "4.2 Adapter databricks.yml", 2)
