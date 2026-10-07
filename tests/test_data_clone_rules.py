@@ -43,3 +43,20 @@ def test_unsupported_source_is_skipped_but_keeps_its_error_and_says_data_not_sav
 def test_other_failures_are_errors():
     assert clone_failure("[PERMISSION_DENIED] User does not have SELECT") == {
         "status": "error", "error": "[PERMISSION_DENIED] User does not have SELECT"}
+
+
+# ── Clé de version source (skip du DEEP CLONE si rien n'a changé) ────────
+
+source_version_key = NS["source_version_key"]
+
+
+def test_recreated_table_with_same_version_number_is_not_skipped():
+    # DROP + CREATE remet la version à 0 : au même numéro qu'hier, le clone était sauté et le
+    # backup gardait les données de l'ancienne table. L'horodatage du commit les distingue.
+    old = source_version_key(2, "2026-10-06T10:00:00.000+00:00")
+    new = source_version_key(2, "2026-10-07T09:30:00.000+00:00")
+    assert old != new
+
+
+def test_same_commit_gives_same_key():
+    assert source_version_key(5, "2026-10-07T09:30:00") == source_version_key(5, "2026-10-07T09:30:00")

@@ -185,7 +185,11 @@ if mode == "restore":
                         f"{CATALOG}.rh.salaires": "table à filtre de lignes : jamais copiée (clone refusé)"}
 
     for fqn, e in v2["tables"].items():
-        if fqn in NOT_BY_NOTEBOOKS:
+        if e["type"] == "VIEW" and fqn in now["tables"]:
+            # DDL rejouée depuis 03_tables.sql (comme scripts/restore_uc.py)
+            check("2 tables", f"vue {fqn} recréée dans son catalogue, même définition",
+                  now["tables"][fqn] == e, f"attendu {e} / obtenu {now['tables'][fqn]}")
+        elif fqn in NOT_BY_NOTEBOOKS:
             check("2 tables", f"{fqn}", fqn not in now["tables"], NOT_BY_NOTEBOOKS[fqn], obs=True)
         else:
             check("2 tables", f"{fqn} restaurée à l'identique (lignes + checksum)",

@@ -158,6 +158,13 @@ def clone_failure(err: str) -> dict:
     if "DELTA_CLONE_UNSUPPORTED_SOURCE" in err or "format is View" in err:
         return {"status": "skipped", "reason": NON_CLONABLE_REASON, "error": err}
     return {"status": "error", "error": err}
+
+
+def source_version_key(version, commit_timestamp) -> str:
+    """Identité de l'état source : version ET horodatage du commit. La version seule ne suffit
+    pas : DROP + CREATE la remet à 0, et au même numéro qu'au dernier backup le clone était
+    sauté — le backup gardait alors les données de l'ancienne table."""
+    return f"{version}@{commit_timestamp}"
 # <<< REGLES CLONE
 
 _checkpoint_lock    = threading.Lock()
@@ -271,7 +278,7 @@ def get_source_version(catalog: str, schema: str, table: str):
     (vue, table non-Delta, etc.) — dans ce cas le clone se fait normalement, sans skip."""
     try:
         row = spark.sql(f"DESCRIBE HISTORY `{catalog}`.`{schema}`.`{table}` LIMIT 1").collect()[0]
-        return row["version"]
+        return source_version_key(row["version"], row["timestamp"])
     except Exception as e:
         print(f"  [WARN] get_source_version({catalog}.{schema}.{table}) a échoué : {_short(e)[:300]}")
         return None
