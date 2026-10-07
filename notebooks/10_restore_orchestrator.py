@@ -60,6 +60,12 @@ dbutils.widgets.text(       "catalog_filter", "",          "Catalogs à restaure
 # Paramètres jobs (utilisés si scope contient 'jobs')
 dbutils.widgets.text(       "job_filter",     "",          "Filtre nom de job (vide = tous)")
 dbutils.widgets.dropdown(   "conflict_mode",  "skip",      ["skip", "recreate"], "Jobs existants : skip / recreate")
+
+# Filtres de périmètre : sans eux, une restauration réelle reprenait TOUT le workspace sauvegardé
+# (notebooks et droits de tous les utilisateurs), tous les pipelines et tous les volumes
+dbutils.widgets.text(       "notebook_filter", "",         "Notebooks / droits : chemin préfixe (ex: /Shared/projet, vide = tous)")
+dbutils.widgets.text(       "pipeline_filter", "",         "Pipelines : sous-chaîne du nom (vide = tous)")
+dbutils.widgets.text(       "volume_filter",   "*.*.*",    "Fichiers de volumes : catalog.schema.volume (jokers *)")
 # lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
 _nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 _nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
@@ -79,6 +85,9 @@ catalog_filter = dbutils.widgets.get("catalog_filter").strip()
 
 job_filter     = dbutils.widgets.get("job_filter").strip()
 conflict_mode  = dbutils.widgets.get("conflict_mode")
+notebook_filter = dbutils.widgets.get("notebook_filter").strip()
+pipeline_filter = dbutils.widgets.get("pipeline_filter").strip()
+volume_filter   = dbutils.widgets.get("volume_filter").strip() or "*.*.*"
 lib_path       = dbutils.widgets.get("lib_path")
 
 if not backup_root:
@@ -112,6 +121,13 @@ if restore_scope & {"grants", "uc_objects"}:
 if "jobs" in restore_scope:
     print(f"[OK] job_filter     = {job_filter or '(tous)'}")
     print(f"[OK] conflict_mode  = {conflict_mode}")
+
+if restore_scope & {"notebooks", "acls"}:
+    print(f"[OK] notebook_filter = {notebook_filter or '(tous)'}")
+if "pipelines" in restore_scope:
+    print(f"[OK] pipeline_filter = {pipeline_filter or '(tous)'}")
+if "volume_files" in restore_scope:
+    print(f"[OK] volume_filter   = {volume_filter}")
 
 # COMMAND ----------
 # MAGIC %md ## Helper — run_step
@@ -207,7 +223,7 @@ if "volume_files" in restore_scope:
             "backup_root":   backup_root,
             "lib_path":      lib_path,
             "restore_date":  restore_point[:10] if restore_point else "",
-            "volume_filter": "*.*.*",
+            "volume_filter": volume_filter,
             "target_volume": "",
             "dry_run":       dry_run,
         },
@@ -275,7 +291,7 @@ if "notebooks" in restore_scope:
             "lib_path":              lib_path,
             "backup_date":           backup_date,
             "restore_type":          "notebooks",
-            "notebook_filter":       "",
+            "notebook_filter":       notebook_filter,
             "target_workspace_path": "",
             "dry_run":               dry_run,
         },
@@ -300,6 +316,7 @@ if "pipelines" in restore_scope:
             "lib_path":      lib_path,
             "backup_date":   backup_date,
             "conflict_mode": conflict_mode,
+            "pipeline_filter": pipeline_filter,
             "dry_run":       dry_run,
         },
         critical = False,
@@ -322,7 +339,7 @@ if "acls" in restore_scope:
             "lib_path":              lib_path,
             "backup_date":           backup_date,
             "restore_type":          "acls",
-            "notebook_filter":       "",
+            "notebook_filter":       notebook_filter,
             "target_workspace_path": "",
             "dry_run":               dry_run,
         },
