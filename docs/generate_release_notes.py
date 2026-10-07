@@ -44,6 +44,13 @@ doc.add_paragraph(
     "indique, objet par objet, ce qui est restaurable et par quel moyen."
 )
 
+doc.add_paragraph(
+    "Un test complet de sauvegarde puis de restauration, objet par objet, a été mené sur "
+    "l'environnement de test avant cette livraison. Il a mis au jour plusieurs défauts silencieux, "
+    "corrigés dans cette version (§2.8 à §2.16) ; les plus importants concernent les jobs, "
+    "sauvegardés sans leurs tâches, et le workspace, dont une partie pouvait manquer au backup."
+)
+
 add_note(
     doc,
     "aucun impact sur vos données ni sur le backup existant. La mise à jour touche les "
@@ -72,7 +79,17 @@ add_table(
         ["Un dossier workspace/ et un dossier pipelines/ dans chaque backup daté",
          "Nouveau format d'export et sauvegarde des pipelines (§3.4, §3.5)"],
         ["L'étape workspace_config peut durer plus longtemps",
-         "Elle parcourt désormais tout le workspace ; les appels sont parallélisés"],
+         "Elle parcourt désormais tout le workspace, avec 4 appels simultanés et des réessais (§2.9)"],
+        ["Le premier backup après la mise à jour recopie toutes les tables",
+         "Changement du test « table inchangée » (§2.13) ; copie incrémentale, une seule fois"],
+        ["Le rapport affiche tables découvertes, sauvegardées, non clonables et en erreur",
+         "Avec la liste des tables non sauvegardées et leur cause (§2.12)"],
+        ["Le statut global peut passer à « degraded »",
+         "Table en erreur de clone ou objets du workspace non exportés (§2.9, §2.12)"],
+        ["07_restore liste des tables « périmées » et ne les restaure pas",
+         "Tables absentes du backup de la date de référence (§2.15)"],
+        ["Trois nouveaux filtres dans 10_restore_orchestrator",
+         "notebook_filter, pipeline_filter, volume_filter (§2.16)"],
     ],
     col_widths=[6.5, 9.5],
 )
@@ -202,7 +219,118 @@ doc.add_paragraph(
     "La variable lib_path disparaît."
 )
 
+add_heading(doc, "2.8 Jobs sauvegardés sans leurs tâches", 2)
+
+doc.add_paragraph(
+    "La liste des jobs était demandée à l'API avec un paramètre que celle-ci ignorait : chaque job "
+    "était sauvegardé avec son nom, son planning et ses permissions, mais sans ses tâches. Une "
+    "restauration recréait des jobs vides. Les définitions sont désormais complètes, y compris pour "
+    "les jobs de plus de 100 tâches."
+)
+
+add_warning(
+    doc,
+    "les backups réalisés avec les versions précédentes ne contiennent pas les tâches des jobs. "
+    "Ne pas s'appuyer sur eux pour restaurer des jobs : attendre un backup réalisé avec la "
+    "version 4.2.",
+)
+
+add_heading(doc, "2.9 Objets du workspace perdus en cas de limitation de débit", 2)
+
+doc.add_paragraph(
+    "L'export du workspace envoyait jusqu'à 16 requêtes simultanées. Au-delà d'un certain débit, "
+    "l'API répond « Too many requests » (HTTP 429) : les objets concernés n'étaient pas sauvegardés "
+    "et l'étape se terminait quand même en succès. Sur l'environnement de test, le dossier /Shared "
+    "entier manquait au backup. Chaque appel est désormais rejoué après un délai en cas de refus, le "
+    "parallélisme par défaut passe à 4, et l'étape workspace_config échoue (statut global « degraded ») "
+    "si des objets restent non exportés."
+)
+
+add_heading(doc, "2.10 Permissions du workspace et des repos jamais restaurées", 2)
+
+doc.add_paragraph(
+    "08_restore_workspace renvoyait les permissions sous la forme où l'API les lit, pas sous celle "
+    "où elle les écrit : chaque restauration de permissions de dossier, notebook ou repo Git était "
+    "refusée (« Permission type not defined »). Elles sont désormais converties, comme pour les jobs "
+    "et les pipelines."
+)
+
+add_heading(doc, "2.11 Vues et catalogues recréés au mauvais endroit", 2)
+
+bullet(doc, "Les définitions de vues étaient exportées sous la forme schéma.vue, sans le catalogue : "
+            "rejouées, elles créaient la vue dans le catalogue courant. Elles sont désormais "
+            "qualifiées catalogue.schéma.vue.")
+bullet(doc, "Les catalogues étaient exportés sans leur emplacement de stockage géré : sur un "
+            "metastore sans stockage racine, leur recréation échouait. L'emplacement et le "
+            "commentaire de chaque catalogue sont désormais repris.")
+
+add_heading(doc, "2.12 Tables non sauvegardées invisibles", 2)
+
+doc.add_paragraph(
+    "Le rapport affichait le nombre de tables découvertes, pas celui des tables sauvegardées. Les "
+    "tables que DEEP CLONE ne sait pas copier (format autre que Delta, table protégée par un filtre "
+    "de lignes ou un masque de colonnes) étaient classées « vue ou format non cloneable », sans "
+    "message : leurs données manquaient au backup sans que rien ne le signale."
+)
+bullet(doc, "Le rapport détaille les tables découvertes, sauvegardées, non clonables et en erreur, "
+            "et liste les tables non sauvegardées avec leur cause.")
+bullet(doc, "Une table en erreur de clone fait passer le statut global du run à « degraded ».")
+bullet(doc, "Si le type des tables d'un schéma ne peut pas être lu dans information_schema, il est "
+            "lu via l'API Unity Catalog : les vues ne sont plus envoyées au clone.")
+
+add_note(
+    doc,
+    "les tables protégées par un filtre de lignes ou un masque de colonnes ne peuvent pas être "
+    "sauvegardées par DEEP CLONE. Elles apparaissent désormais dans le rapport ; leur couverture "
+    "(reconstruction depuis la source, par exemple) est à décider table par table.",
+)
+
+add_heading(doc, "2.13 Table recréée non recopiée", 2)
+
+doc.add_paragraph(
+    "Une table inchangée depuis la veille n'est pas recopiée : le test portait sur son seul numéro "
+    "de version. Une table supprimée puis recréée repart à la version 0 ; au même numéro qu'au "
+    "dernier backup, elle n'était pas recopiée et le backup gardait les données de l'ancienne table. "
+    "Le test porte désormais sur la version et sur la date de son enregistrement."
+)
+
+add_heading(doc, "2.14 Table en échec chaque jour après une modification de colonnes", 2)
+
+doc.add_paragraph(
+    "Quand une table source passe au nommage de colonnes par nom (column mapping) puis qu'une colonne "
+    "est renommée ou supprimée, la copie existante n'accepte plus de mise à jour : la table échouait "
+    "tous les jours (DELTA_UNSUPPORTED_COLUMN_MAPPING_MODE_CHANGE). L'ancienne copie est désormais "
+    "archivée sous incremental/_reclone_archive/<date>/ et la table est recopiée en entier."
+)
+
+add_note(
+    doc,
+    "le dossier _reclone_archive n'est pas purgé par la rétention : il conserve l'historique des "
+    "copies remplacées, à supprimer manuellement quand il n'est plus utile.",
+)
+
+add_heading(doc, "2.15 Restauration de tables périmées", 2)
+
+doc.add_paragraph(
+    "07_restore restaurait toutes les tables présentes dans incremental/, y compris celles copiées un "
+    "jour puis en erreur, non clonables ou supprimées depuis : leurs données dataient d'un backup "
+    "antérieur, sans avertissement. Seules les tables sauvegardées avec succès à la date de référence "
+    "(dernier backup, ou dernier backup au plus tard à la date du point de restauration) sont "
+    "désormais restaurées. Les autres sont listées ; le paramètre include_stale = true les inclut."
+)
+
+add_heading(doc, "2.16 Restauration trop large depuis l'orchestrateur", 2)
+
+doc.add_paragraph(
+    "10_restore_orchestrator ne transmettait aucun filtre aux restaurations du workspace, des "
+    "pipelines et des fichiers de volumes : une restauration réelle reprenait les notebooks et "
+    "permissions de tous les utilisateurs, tous les pipelines et tous les volumes. Trois paramètres "
+    "s'ajoutent : notebook_filter (chemin), pipeline_filter (nom) et volume_filter "
+    "(catalogue.schéma.volume, jokers acceptés)."
+)
+
 doc.add_page_break()
+
 
 
 # ── 3. Ajouts ─────────────────────────────────────────────────────────────────
@@ -331,7 +459,8 @@ numbered(doc, "Toujours dans votre databricks.yml : supprimer la variable lib_pa
 numbered(doc, "Vérifier que le quota de vCPU de la famille ESv3 permet 8 vCPU supplémentaires dans la région, et qu'aucune politique de cluster n'interdit Standard_E8s_v3.")
 numbered(doc, "databricks bundle validate --target <cible> — vérifier les lignes Host: et User:.")
 numbered(doc, "databricks bundle deploy --target <cible>.")
-numbered(doc, "Lancer une exécution manuelle de contrôle avant de réactiver la planification.")
+numbered(doc, "Lancer une exécution manuelle de contrôle avant de réactiver la planification. Elle "
+              "recopie toutes les tables une fois (§2.13) : prévoir une durée plus longue que d'habitude.")
 
 add_warning(
     doc,
@@ -361,6 +490,9 @@ bullet(doc, "Statut du run : réussi dès la première tentative.")
 bullet(doc, "Metrics du driver : pic de JVM heap usage nettement sous 40 Go, pauses GC basses.")
 bullet(doc, "Dossier uc_metadata/ du jour : présence de 05_volumes.sql et 06_functions.sql.")
 bullet(doc, "Sortie de 01_uc_metadata : aucun avertissement « lib/uc_ddl.py introuvable ».")
+bullet(doc, "Rapport du jour : lire les tables non clonables et en erreur, et décider de leur couverture.")
+bullet(doc, "Fichier jobs/jobs_all.json du jour : chaque job contient ses tâches (champ tasks).")
+bullet(doc, "Sortie de workspace_config : « Erreurs d'export : 0 ».")
 bullet(doc, "Sortie de 01_uc_metadata : les lignes [SKIP] correspondent bien à vos catalogs fédérés.")
 
 add_note(

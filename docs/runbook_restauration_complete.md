@@ -376,13 +376,20 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 |--------|-------------|
 | `backup_root` | Pré-rempli avec le chemin ADLS production |
 | `backup_date` | Vide = auto-détection via `latest.json` |
-| `restore_scope` | Multiselect : `tables`, `uc_objects`, `grants`, `jobs`, `notebooks`, `pipelines`, `acls` |
+| `restore_scope` | Multiselect : `tables`, `uc_objects`, `volume_files`, `grants`, `jobs`, `notebooks`, `pipelines`, `acls` |
 | `dry_run` | `true` (simulation) / `false` (applique) |
 | `restore_level` | Pour les tables : `incremental` / `weekly` / `monthly` |
 | `restore_point` | Pour les tables : timestamp ou label (`2026-W25`) |
 | `source_table` | Pour les tables : `cat.schema.table` ou vide = toutes |
 | `catalog_filter` | Pour les grants UC : noms des catalogs séparés par virgule, vide = tous |
 | `job_filter` | Pour les jobs : sous-chaîne du nom, vide = tous |
+| `notebook_filter` | Pour les notebooks et leurs permissions : chemin préfixe (`/Shared/projet`), vide = tout le workspace |
+| `pipeline_filter` | Pour les pipelines : sous-chaîne du nom, vide = tous |
+| `volume_filter` | Pour les fichiers de volumes : `catalog.schema.volume`, jokers `*` acceptés |
+
+> ⚠️ Laissés vides, ces filtres couvrent **tout** le backup (notebooks et permissions de tous les utilisateurs, tous les pipelines, tous les volumes). Pour une restauration partielle, toujours les renseigner.
+
+> `07_restore` ne restaure que les tables sauvegardées avec succès à la date de référence (dernier backup, ou dernier au plus tard au `restore_point`). Les tables présentes dans `incremental/` mais absentes de ce backup sont listées comme périmées ; `include_stale = true` (widget de `07_restore`) les restaure quand même.
 | `conflict_mode` | Pour les jobs : `skip` (défaut) / `recreate` |
 
 **Procédure :**

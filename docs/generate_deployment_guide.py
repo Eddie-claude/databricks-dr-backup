@@ -87,6 +87,9 @@ add_table(
         ["Ordre de restauration avec l'infrastructure as code ; rejeu des seules permissions", "§9.2"],
         ["Messages d'erreur sans trace Java, qui tronquaient la sortie des notebooks", "—"],
         ["Dossier lib/ trouvé automatiquement : la variable lib_path disparaît", "§4.1, §4.2"],
+        ["Jobs sauvegardés avec leurs tâches ; export du workspace sans perte (réessais)", "—"],
+        ["Rapport : tables sauvegardées, non clonables et en erreur, avec leur liste", "A.6"],
+        ["Restauration limitée aux tables du backup de référence ; filtres de l'orchestrateur", "§9"],
     ],
     col_widths=[13, 3],
 )
@@ -1177,6 +1180,21 @@ add_warning(
     "simulation d'abord et lire les commandes proposées.",
 )
 
+doc.add_paragraph(
+    "Paramètres de périmètre de 10_restore_orchestrator : catalog_filter (permissions, volumes et "
+    "fonctions), job_filter (nom de job), notebook_filter (chemin dans le workspace, pour les "
+    "notebooks et leurs permissions), pipeline_filter (nom de pipeline) et volume_filter "
+    "(catalogue.schéma.volume, jokers acceptés). Laissés vides, ils couvrent tout le backup : pour une "
+    "restauration partielle, toujours les renseigner."
+)
+
+doc.add_paragraph(
+    "07_restore ne restaure que les tables sauvegardées avec succès à la date de référence : le "
+    "dernier backup, ou le dernier au plus tard à la date du point de restauration. Les tables "
+    "présentes dans le stockage mais absentes de ce backup sont listées comme périmées ; "
+    "include_stale = true les restaure quand même, dans l'état de leur dernier backup réussi."
+)
+
 add_heading(doc, "9.1 Restauration ponctuelle sans notebook", 2)
 
 doc.add_paragraph("Pour une table isolée, la restauration peut se faire directement en SQL :")
@@ -1341,12 +1359,17 @@ numbered(doc, "Le cluster n'est pas en mode d'accès Dédié (Single User). C'es
 numbered(doc, "Les GRANT du §2.5 n'ont pas été accordés au principal qui exécute le job.")
 numbered(doc, "Le rôle IAM sur le compte de stockage n'est pas encore propagé. Attendre 10 minutes et réessayer.")
 
-add_heading(doc, "A.6 Une table est absente du backup sans message d'erreur", 2)
+add_heading(doc, "A.6 Une table est absente du backup", 2)
 
-doc.add_paragraph("Comportement attendu dans les cas suivants :")
+doc.add_paragraph(
+    "Le rapport du jour liste les tables non sauvegardées et leur cause (section « Tables non "
+    "sauvegardées »). Comportement attendu dans les cas suivants :"
+)
 
 bullet(doc, "Vue, vue matérialisée ou Streaming Table : non clonable par DEEP CLONE")
 bullet(doc, "Table dans un format autre que Delta")
+bullet(doc, "Table protégée par un filtre de lignes ou un masque de colonnes : non clonable, "
+            "listée comme non clonable dans le rapport")
 bullet(doc, "Catalog auquel le principal du job n'a pas accès en lecture")
 bullet(doc, "Catalog exclu par conception : hive_metastore, system, samples, information_schema")
 bullet(doc, "Catalog fédéré ou Delta Sharing : exclu par conception, signalé par une ligne [SKIP] dans 01_uc_metadata")
