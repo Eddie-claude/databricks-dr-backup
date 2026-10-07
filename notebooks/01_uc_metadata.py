@@ -124,9 +124,43 @@ print(f"[01_catalogs] {len(catalogs)} catalogs exportés : {catalogs}")
 # COMMAND ----------
 # DBTITLE 1, Export schemas + tables (avec cache schemas)
 
+# >>> REGLES TABLES
+CLONEABLE_TYPES = ("MANAGED", "EXTERNAL")
+
+
+def cloneable_names(types: dict) -> set:
+    """Tables dont les données se clonent : ni vues, ni vues matérialisées, ni tables étrangères."""
+    return {name for name, kind in types.items() if kind in CLONEABLE_TYPES}
+
+
+def api_table_types(get, catalog: str, schema: str) -> dict:
+    """{table: table_type} via l'API Unity Catalog. get(path, params) → JSON.
+    Repli quand information_schema est illisible : sans lui, toutes les entrées (vues comprises)
+    partaient au clone, gonflaient les « ignorées » et masquaient les vraies tables non copiées."""
+    types, params = {}, {"catalog_name": catalog, "schema_name": schema, "max_results": 50,
+                         "omit_columns": "true", "omit_properties": "true"}
+    while True:
+        page = get("/api/2.1/unity-catalog/tables", params)
+        types.update({t["name"]: t.get("table_type", "") for t in page.get("tables", [])})
+        if not page.get("next_page_token"):
+            return types
+        params = {**params, "page_token": page["next_page_token"]}
+# <<< REGLES TABLES
+
+
+def _uc_api_get(path, params):
+    import requests
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    r = requests.get(f"{ctx.apiUrl().get()}{path}", params=params, timeout=60,
+                     headers={"Authorization": f"Bearer {ctx.apiToken().get()}"})
+    r.raise_for_status()
+    return r.json()
+
+
 schema_ddls = []
 table_ddls = []
 table_names = []
+untyped_schemas = []   # schémas dont le type des tables est resté inconnu (tout part au clone)
 
 for catalog in catalogs:
     schemas = [
@@ -146,8 +180,16 @@ for catalog in catalogs:
                 """).collect()
             }
         except Exception as e:
-            print(f"[WARN] Fallback table_type pour {catalog}.{schema}: {_short(e)}")
-            cloneable_tables = None  # inclure tout, les vues seront filtrées dans 02_data_clone
+            try:
+                cloneable_tables = cloneable_names(api_table_types(_uc_api_get, catalog, schema))
+                print(f"[WARN] information_schema illisible pour {catalog}.{schema} ({_short(e)}) "
+                      f"— types des tables lus via l'API Unity Catalog")
+            except Exception as e_api:
+                # Dernier recours : tout part au clone, les vues y seront classées non clonables
+                cloneable_tables = None
+                untyped_schemas.append(f"{catalog}.{schema}")
+                print(f"[WARN] Types des tables inconnus pour {catalog}.{schema} "
+                      f"(information_schema : {_short(e)} ; API : {_short(e_api)}) — vues comprises dans le clone")
 
         tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
         for t in tables:
@@ -297,6 +339,7 @@ result = {
     "catalogs": catalogs,
     "skipped_catalogs": skipped_catalogs,
     "table_names": table_names,
+    "untyped_schemas": untyped_schemas,
     "grant_count": len(grant_statements),
     "volume_count": len(volume_ddls),
     "function_count": len(function_ddls),
