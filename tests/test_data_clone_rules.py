@@ -60,3 +60,21 @@ def test_recreated_table_with_same_version_number_is_not_skipped():
 
 def test_same_commit_gives_same_key():
     assert source_version_key(5, "2026-10-07T09:30:00") == source_version_key(5, "2026-10-07T09:30:00")
+
+
+# ── Re-clone complet ─────────────────────────────────────────────────────
+
+needs_full_reclone, reclone_archive_path = NS["needs_full_reclone"], NS["reclone_archive_path"]
+
+
+def test_column_mapping_change_needs_full_reclone():
+    # Le clone incrémental vers la copie existante échouait chaque jour (cas client exploit_lab)
+    assert needs_full_reclone("[DELTA_UNSUPPORTED_COLUMN_MAPPING_MODE_CHANGE] Changing column "
+                              "mapping mode from 'none' to 'name' is not supported.")
+    assert not needs_full_reclone("[PERMISSION_DENIED] User does not have SELECT")
+
+
+def test_previous_copy_is_archived_outside_the_restore_tree():
+    # Sous incremental/_reclone_archive : ignoré par 07 (dossiers « _ »), historique conservé
+    assert reclone_archive_path("abfss://c@a/backup", "2026-10-06", "cat.sch.tbl") == \
+        "abfss://c@a/backup/incremental/_reclone_archive/2026-10-06/cat/sch/tbl"

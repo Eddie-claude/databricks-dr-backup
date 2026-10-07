@@ -165,6 +165,23 @@ def source_version_key(version, commit_timestamp) -> str:
     pas : DROP + CREATE la remet à 0, et au même numéro qu'au dernier backup le clone était
     sauté — le backup gardait alors les données de l'ancienne table."""
     return f"{version}@{commit_timestamp}"
+
+
+# Erreurs où la copie existante ne peut plus recevoir de clone incrémental : il faut repartir
+# d'une copie neuve (sinon la table échoue tous les jours, cas DELTA_UNSUPPORTED_COLUMN_MAPPING_MODE_CHANGE
+# quand la source passe en column mapping « name »).
+FULL_RECLONE_ERRORS = ("DELTA_UNSUPPORTED_COLUMN_MAPPING_MODE_CHANGE",)
+
+
+def needs_full_reclone(err: str) -> bool:
+    return any(code in err for code in FULL_RECLONE_ERRORS)
+
+
+def reclone_archive_path(backup_root: str, backup_date: str, fqn: str) -> str:
+    """Où déplacer l'ancienne copie avant un clone complet : son historique reste consultable
+    (time travel manuel), hors de l'arborescence lue par 07_restore (dossiers « _ » ignorés)."""
+    catalog, schema, table = fqn.split(".")
+    return f"{backup_root}/incremental/_reclone_archive/{backup_date}/{catalog}/{schema}/{table}"
 # <<< REGLES CLONE
 
 _checkpoint_lock    = threading.Lock()
@@ -331,9 +348,18 @@ def clone_one(args: tuple) -> dict:
     print(f"[{ts}] ({idx}/{pending_total}) → {fqn}")
 
     try:
-        result  = spark.sql(
-            f"CREATE OR REPLACE TABLE delta.`{dest}` DEEP CLONE `{catalog}`.`{schema}`.`{table}`"
-        )
+        clone_sql = f"CREATE OR REPLACE TABLE delta.`{dest}` DEEP CLONE `{catalog}`.`{schema}`.`{table}`"
+        archived_to = None
+        try:
+            result = spark.sql(clone_sql)
+        except Exception as e_clone:
+            if not needs_full_reclone(_short(e_clone)):
+                raise
+            archived_to = reclone_archive_path(backup_root, backup_date, fqn)
+            print(f"  [WARN] {fqn} : la copie existante n'accepte plus le clone incrémental "
+                  f"({_short(e_clone)[:120]}) — archivée dans {archived_to}, clone complet")
+            dbutils.fs.mv(dest, archived_to, recurse=True)
+            result = spark.sql(clone_sql)
         metrics = result.collect()[0].asDict()
         elapsed = time.time() - t0
         # Octets réellement copiés. Tester `is not None` et non la valeur : avec une chaîne de
@@ -357,6 +383,8 @@ def clone_one(args: tuple) -> dict:
             "incremental":  num_files == 0,
             "source_version": source_version,
         }
+        if archived_to:
+            entry["full_reclone_archived_to"] = archived_to
         suffix = " (aucun changement)" if num_files == 0 else f" — {size_gb:.2f} GB ({num_files} fichiers)"
         print(f"  ✓ {fqn}{suffix} en {elapsed:.0f}s")
         try:
