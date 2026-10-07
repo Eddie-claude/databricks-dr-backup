@@ -69,7 +69,7 @@ notebooks_backup_root = f"{backup_root}/{backup_date}/notebooks"
 objects_path          = f"{backup_root}/{backup_date}/workspace/objects"
 
 sys.path.insert(0, dbutils.widgets.get("lib_path"))
-from workspace_export import import_request, remap_path
+from workspace_export import explicit_acl, import_request, remap_path
 
 # Format v4.2+ : contenu natif de tous les objets dans un seul jeu de données
 try:
@@ -294,7 +294,7 @@ if restore_type in ("acls", "both"):
             acl_nb_skip += 1
             continue
 
-        if not perm_type or not ws_path or not acl:
+        if not perm_type or not ws_path or not explicit_acl(acl):
             acl_nb_skip += 1
             continue
 
@@ -329,7 +329,7 @@ if restore_type in ("acls", "both"):
                 r = requests.put(
                     f"{host}/api/2.0/permissions/{perm_type}/{current_id}",
                     headers=headers,
-                    json={"access_control_list": acl},
+                    json={"access_control_list": explicit_acl(acl)},
                     timeout=15
                 )
                 if r.ok:
@@ -375,7 +375,7 @@ if restore_type in ("acls", "both"):
         url      = repo.get("url", "")
         acl      = repo.get("acl", [])
 
-        if not acl:
+        if not explicit_acl(acl):
             continue
 
         print(f"\n  {'──' if dry_run else '▶ '} {path}  ({url})")
@@ -385,7 +385,7 @@ if restore_type in ("acls", "both"):
                 r = requests.put(
                     f"{host}/api/2.0/permissions/repos/{repo_id}",
                     headers=headers,
-                    json={"access_control_list": acl},
+                    json={"access_control_list": explicit_acl(acl)},
                     timeout=15
                 )
                 if r.ok:
