@@ -54,7 +54,11 @@ dbutils.widgets.text("exclude_paths",      "/Repos", "Chemins exclus (séparés 
 dbutils.widgets.text("export_notebooks",   "true",  "Exporter notebooks / fichiers / dashboards (true/false)")
 dbutils.widgets.text("export_jobs",        "true",  "Exporter les définitions et permissions des jobs (true/false)")
 dbutils.widgets.text("export_pipelines",   "true",  "Exporter les définitions et permissions des pipelines (true/false)")
-dbutils.widgets.text("max_parallel",       "16",    "Appels API simultanés")
+dbutils.widgets.text("max_parallel",       "4",     "Appels API simultanés (au-delà, l'API limite le débit : HTTP 429)")
+# lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
+_nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+_nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
+dbutils.widgets.text("lib_path", _nb_path.rsplit("/notebooks/", 1)[0] + "/lib", "Chemin vers lib/")
 
 backup_root      = dbutils.widgets.get("backup_root")
 backup_date      = dbutils.widgets.get("backup_date")
@@ -69,6 +73,15 @@ token   = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiT
 host    = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
 headers = {"Authorization": f"Bearer {token}"}
 
+import sys
+sys.path.insert(0, dbutils.widgets.get("lib_path"))
+from workspace_export import call_with_retry, list_all_jobs
+
+
+def _get(url, **kw):
+    """GET rejoué sur limitation de débit (429) : sans réessai, des objets manquaient en silence."""
+    return call_with_retry(lambda: requests.get(url, headers=headers, **kw))
+
 output_base = f"{backup_root}/{backup_date}"
 print(f"[OK] Workspace paths : {workspace_paths} | exclus : {exclude_paths}")
 print(f"[OK] export_notebooks={export_notebooks} | export_jobs={export_jobs} | export_pipelines={export_pipelines}")
@@ -78,10 +91,7 @@ print(f"[OK] export_notebooks={export_notebooks} | export_jobs={export_jobs} | e
 
 # COMMAND ----------
 def get_acl(object_type, object_id):
-    r = requests.get(
-        f"{host}/api/2.0/permissions/{object_type}/{object_id}",
-        headers=headers, timeout=15
-    )
+    r = _get(f"{host}/api/2.0/permissions/{object_type}/{object_id}", timeout=15)
     if r.ok:
         return r.json().get("access_control_list", [])
     return []
@@ -100,7 +110,7 @@ def list_workspace_recursive(root: str) -> list:
         path = stack.pop()
         if _excluded(path):
             continue
-        r = requests.get(f"{host}/api/2.0/workspace/list", headers=headers, params={"path": path}, timeout=30)
+        r = _get(f"{host}/api/2.0/workspace/list", params={"path": path}, timeout=30)
         if not r.ok:
             unreadable_dirs.append(f"{path} (HTTP {r.status_code})")
             continue
@@ -146,7 +156,7 @@ print(f"[OK] {len(acls_backup)} ACLs workspace sauvegardées")
 # MAGIC %md ## 5.2 — ACLs Repos Git
 
 # COMMAND ----------
-resp  = requests.get(f"{host}/api/2.0/repos", headers=headers, timeout=30)
+resp  = _get(f"{host}/api/2.0/repos", timeout=30)
 repos = resp.json().get("repos", []) if resp.ok else []
 
 repos_acls = []
@@ -187,8 +197,7 @@ def export_object(obj: dict):
     """(ligne à écrire, erreur) — export AUTO : contenu natif (source, .ipynb, fichier brut)."""
     path = obj.get("path", "")
     try:
-        r = requests.get(f"{host}/api/2.0/workspace/export", headers=headers,
-                         params={"path": path, "format": "AUTO"}, timeout=60)
+        r = _get(f"{host}/api/2.0/workspace/export", params={"path": path, "format": "AUTO"}, timeout=60)
         if not r.ok:
             return None, f"{path}: HTTP {r.status_code}"
         d = r.json()
@@ -241,19 +250,13 @@ jobs_error = 0
 all_jobs   = []
 
 if export_jobs:
-    # Pagination API 2.1
-    params = {"expand_tasks": True, "limit": 100}
-    while True:
-        r = requests.get(f"{host}/api/2.1/jobs/list",
-                         headers=headers, params=params, timeout=30)
-        if not r.ok:
-            print(f"[WARN] Jobs API échoué : {r.status_code} — {r.text[:200]}")
-            break
-        data = r.json()
-        all_jobs.extend(data.get("jobs", []))
-        if not data.get("has_more"):
-            break
-        params["page_token"] = data.get("next_page_token", "")
+    def _api_get(path, params):
+        r = _get(f"{host}{path}", params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    # Définitions complètes, tâches comprises (lib/workspace_export.list_all_jobs)
+    all_jobs = list_all_jobs(_api_get)
 
     if all_jobs:
         # Fichier consolidé
@@ -294,7 +297,7 @@ pipelines_error = 0
 if export_pipelines:
     statuses, params = [], {"max_results": 100}   # au-delà de 100 : HTTP 400
     while True:
-        r = requests.get(f"{host}/api/2.0/pipelines", headers=headers, params=params, timeout=30)
+        r = _get(f"{host}/api/2.0/pipelines", params=params, timeout=30)
         if not r.ok:
             print(f"[WARN] Pipelines API échoué : {r.status_code} — {r.text[:200]}")
             break
@@ -306,7 +309,7 @@ if export_pipelines:
 
     def export_pipeline(status: dict):
         pid = status["pipeline_id"]
-        r = requests.get(f"{host}/api/2.0/pipelines/{pid}", headers=headers, timeout=30)
+        r = _get(f"{host}/api/2.0/pipelines/{pid}", timeout=30)
         if not r.ok:
             return None, f"{status.get('name', pid)}: HTTP {r.status_code}"
         p = r.json()
@@ -358,5 +361,10 @@ print(f"""
 ║  Pipelines exportés: {pipelines_ok:<20} ║
 ╚══════════════════════════════════════════╝
 """)
+
+n_failed = nb_error + jobs_error + pipelines_error
+if n_failed:
+    raise RuntimeError(f"{n_failed} objet(s) non sauvegardé(s) malgré les réessais (détail ci-dessus) "
+                       f"— backup du workspace incomplet : {json.dumps(summary)}")
 
 dbutils.notebook.exit(json.dumps(summary))

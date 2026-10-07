@@ -72,3 +72,79 @@ def test_pipeline_payload_drops_identifiers():
     assert "id" not in payload
     assert payload["name"] == "ingest" and payload["libraries"] == spec["libraries"]
     assert spec["id"] == "abc"   # l'original n'est pas modifié
+
+
+# ── Liste complète des jobs (05_workspace_config) ────────────────────────
+
+from types import SimpleNamespace
+
+from lib.workspace_export import call_with_retry, list_all_jobs
+
+
+class FakeJobsApi:
+    """GET /api/2.1/jobs/list et /jobs/get ; enregistre les paramètres reçus."""
+
+    def __init__(self, pages, details=None):
+        self.pages, self.details, self.calls = pages, details or {}, []
+
+    def __call__(self, path, params):
+        self.calls.append((path, dict(params)))
+        if path.endswith("/jobs/list"):
+            return self.pages[params.get("page_token") or ""]
+        pages = self.details[params["job_id"]]
+        return pages[params.get("page_token") or ""]
+
+
+def test_list_all_jobs_asks_expanded_tasks_as_lowercase_string():
+    # requests transmet le booléen Python True sous la forme « True », que l'API ignore :
+    # les jobs étaient sauvegardés sans leurs tâches.
+    api = FakeJobsApi({"": {"jobs": []}})
+    list_all_jobs(api)
+    assert api.calls[0][1]["expand_tasks"] == "true"
+
+
+def test_list_all_jobs_follows_pagination():
+    api = FakeJobsApi({
+        "": {"jobs": [{"job_id": 1, "settings": {"tasks": [{"task_key": "a"}]}}],
+             "has_more": True, "next_page_token": "p2"},
+        "p2": {"jobs": [{"job_id": 2, "settings": {"tasks": [{"task_key": "b"}]}}]},
+    })
+    assert [j["job_id"] for j in list_all_jobs(api)] == [1, 2]
+
+
+def test_list_all_jobs_completes_truncated_tasks_with_jobs_get():
+    # jobs/list renvoie au plus 100 tâches par job (has_more) : la définition complète vient de jobs/get
+    api = FakeJobsApi(
+        {"": {"jobs": [{"job_id": 7, "has_more": True, "settings": {"tasks": [{"task_key": "t1"}]}}]}},
+        {7: {"": {"job_id": 7, "has_more": True, "next_page_token": "x",
+                  "settings": {"name": "gros", "tasks": [{"task_key": "t1"}]}},
+             "x": {"job_id": 7, "settings": {"tasks": [{"task_key": "t2"}]}}}},
+    )
+    job = list_all_jobs(api)[0]
+    assert [t["task_key"] for t in job["settings"]["tasks"]] == ["t1", "t2"]
+    assert job["settings"]["name"] == "gros" and "has_more" not in job
+
+
+# ── Réessais sur limitation de débit (HTTP 429) ──────────────────────────
+
+def _resp(code, retry_after=None):
+    return SimpleNamespace(status_code=code, headers={"Retry-After": retry_after} if retry_after else {})
+
+
+def test_retry_on_429_until_success_honouring_retry_after():
+    responses, sleeps = [_resp(429, "3"), _resp(429), _resp(200)], []
+    r = call_with_retry(lambda: responses.pop(0), sleep=sleeps.append)
+    assert r.status_code == 200
+    assert sleeps[0] == 3 and len(sleeps) == 2
+
+
+def test_retry_gives_up_and_returns_last_response():
+    sleeps = []
+    r = call_with_retry(lambda: _resp(429), retries=3, sleep=sleeps.append)
+    assert r.status_code == 429 and len(sleeps) == 3
+
+
+def test_no_retry_on_client_error():
+    calls = []
+    r = call_with_retry(lambda: calls.append(1) or _resp(404), sleep=lambda s: None)
+    assert r.status_code == 404 and len(calls) == 1
