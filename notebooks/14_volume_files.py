@@ -30,7 +30,10 @@ from pyspark.sql import functions as F
 
 dbutils.widgets.text("backup_root",    "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",    str(date.today()), "Date backup YYYY-MM-DD")
-dbutils.widgets.text("lib_path",       "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
+# lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
+_nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+_nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
+dbutils.widgets.text("lib_path", _nb_path.rsplit("/notebooks/", 1)[0] + "/lib", "Chemin vers lib/")
 dbutils.widgets.text("retain_daily",   "30", "Rétention quotidienne (jours)")
 dbutils.widgets.text("retain_monthly", "1",  "Rétention mensuelle (mois)")
 dbutils.widgets.text("max_parallel",   "8",  "Copies simultanées")

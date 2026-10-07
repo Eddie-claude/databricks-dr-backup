@@ -38,7 +38,10 @@ dbutils.widgets.text(     "pipeline_filter", "", "Filtre nom de pipeline (sous-c
 dbutils.widgets.dropdown( "conflict_mode",   "skip", ["skip", "recreate"], "Si le pipeline existe : skip / recreate")
 dbutils.widgets.dropdown( "include_bundle",  "false", ["false", "true"], "Restaurer aussi les pipelines déployés par bundle")
 dbutils.widgets.dropdown( "dry_run",         "true", ["true", "false"], "Dry-run (true = simulation)")
-dbutils.widgets.text(     "lib_path",        "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
+# lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
+_nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+_nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
+dbutils.widgets.text("lib_path", _nb_path.rsplit("/notebooks/", 1)[0] + "/lib", "Chemin vers lib/")
 
 backup_root     = dbutils.widgets.get("backup_root").strip().rstrip("/")
 backup_date     = dbutils.widgets.get("backup_date").strip()

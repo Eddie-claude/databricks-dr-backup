@@ -26,7 +26,10 @@ spark = SparkSession.builder.getOrCreate()
 
 # COMMAND ----------
 dbutils.widgets.text("backup_root", "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
-dbutils.widgets.text("lib_path",    "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
+# lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
+_nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+_nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
+dbutils.widgets.text("lib_path", _nb_path.rsplit("/notebooks/", 1)[0] + "/lib", "Chemin vers lib/")
 
 backup_root = dbutils.widgets.get("backup_root").rstrip("/")
 lib_path    = dbutils.widgets.get("lib_path")

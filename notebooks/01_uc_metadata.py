@@ -43,7 +43,10 @@ def _short(e) -> str:
 # DBTITLE 1, Paramètres
 dbutils.widgets.text("backup_root", "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date", str(date.today()), "Date backup YYYY-MM-DD")
-dbutils.widgets.text("lib_path", "/Workspace/Shared/dr-backup/lib", "Chemin vers lib/")
+# lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
+_nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+_nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
+dbutils.widgets.text("lib_path", _nb_path.rsplit("/notebooks/", 1)[0] + "/lib", "Chemin vers lib/")
 
 backup_root = dbutils.widgets.get("backup_root")
 backup_date = dbutils.widgets.get("backup_date")

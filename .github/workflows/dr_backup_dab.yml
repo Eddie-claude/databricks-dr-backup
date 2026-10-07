@@ -59,16 +59,19 @@ jobs:
           databricks bundle deploy \
             --target ${{ github.event.inputs.target || 'prod' }}
 
-      - name: Sync notebooks to workspace (chemin direct)
+      - name: Sync notebooks + lib to workspace (chemin direct)
         run: |
           TARGET="${{ github.event.inputs.target || 'prod' }}"
           if [ "$TARGET" = "prod" ]; then
-            WS_PATH="/Workspace/Shared/dr-backup/notebooks"
+            WS_ROOT="/Workspace/Shared/dr-backup"
           else
-            WS_PATH="/Workspace/Shared/dr-backup-dev/notebooks"
+            WS_ROOT="/Workspace/Shared/dr-backup-dev"
           fi
-          echo "Synchronisation notebooks → $WS_PATH"
-          databricks workspace import-dir notebooks "$WS_PATH" --overwrite
+          # Les notebooks copiés ici cherchent lib/ à côté d'eux ($WS_ROOT/lib) : les deux
+          # dossiers doivent être synchronisés ensemble.
+          echo "Synchronisation notebooks + lib → $WS_ROOT"
+          databricks workspace import-dir notebooks "$WS_ROOT/notebooks" --overwrite
+          databricks workspace import-dir lib "$WS_ROOT/lib" --overwrite
           echo "Synchronisation terminée"
 
       - name: Run job (optionnel)

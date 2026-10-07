@@ -60,6 +60,10 @@ dbutils.widgets.text(       "catalog_filter", "",          "Catalogs à restaure
 # Paramètres jobs (utilisés si scope contient 'jobs')
 dbutils.widgets.text(       "job_filter",     "",          "Filtre nom de job (vide = tous)")
 dbutils.widgets.dropdown(   "conflict_mode",  "skip",      ["skip", "recreate"], "Jobs existants : skip / recreate")
+# lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
+_nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+_nb_path = _nb_path if _nb_path.startswith("/Workspace") else "/Workspace" + _nb_path
+dbutils.widgets.text("lib_path", _nb_path.rsplit("/notebooks/", 1)[0] + "/lib", "Chemin vers lib/")
 
 backup_root    = dbutils.widgets.get("backup_root").strip().rstrip("/")
 backup_date    = dbutils.widgets.get("backup_date").strip()
@@ -75,6 +79,7 @@ catalog_filter = dbutils.widgets.get("catalog_filter").strip()
 
 job_filter     = dbutils.widgets.get("job_filter").strip()
 conflict_mode  = dbutils.widgets.get("conflict_mode")
+lib_path       = dbutils.widgets.get("lib_path")
 
 if not backup_root:
     raise ValueError("backup_root est vide — renseignez le chemin abfss://...")
@@ -177,6 +182,7 @@ if "uc_objects" in restore_scope:
         notebook_path = "./12_restore_uc_objects",
         params        = {
             "backup_root":    backup_root,
+            "lib_path":       lib_path,
             "backup_date":    backup_date,
             "catalog_filter": catalog_filter,
             "dry_run":        dry_run,
@@ -199,6 +205,7 @@ if "volume_files" in restore_scope:
         notebook_path = "./15_restore_volume_files",
         params        = {
             "backup_root":   backup_root,
+            "lib_path":      lib_path,
             "restore_date":  restore_point[:10] if restore_point else "",
             "volume_filter": "*.*.*",
             "target_volume": "",
@@ -242,6 +249,7 @@ if "jobs" in restore_scope:
         notebook_path = "./09_restore_jobs",
         params        = {
             "backup_root":   backup_root,
+            "lib_path":      lib_path,
             "backup_date":   backup_date,
             "job_filter":    job_filter,
             "conflict_mode": conflict_mode,
@@ -264,6 +272,7 @@ if "notebooks" in restore_scope:
         notebook_path = "./08_restore_workspace",
         params        = {
             "backup_root":           backup_root,
+            "lib_path":              lib_path,
             "backup_date":           backup_date,
             "restore_type":          "notebooks",
             "notebook_filter":       "",
@@ -288,6 +297,7 @@ if "pipelines" in restore_scope:
         notebook_path = "./13_restore_pipelines",
         params        = {
             "backup_root":   backup_root,
+            "lib_path":      lib_path,
             "backup_date":   backup_date,
             "conflict_mode": conflict_mode,
             "dry_run":       dry_run,
@@ -309,6 +319,7 @@ if "acls" in restore_scope:
         notebook_path = "./08_restore_workspace",
         params        = {
             "backup_root":           backup_root,
+            "lib_path":              lib_path,
             "backup_date":           backup_date,
             "restore_type":          "acls",
             "notebook_filter":       "",

@@ -6,9 +6,6 @@ variables:
   backup_root:
     description: "Chemin ADLS racine du backup (abfss://...)"
     default: "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
-  lib_path:
-    description: "Chemin workspace vers lib/"
-    default: "/Workspace/Shared/dr-backup/lib"
   notification_email:
     description: "Email de notification en cas d'échec"
     default: "efi@keyit.ch"
@@ -96,7 +93,8 @@ resources:
             notebook_path: ./notebooks/00_orchestrator.py
             base_parameters:
               backup_root:    ${var.backup_root}
-              lib_path:       ${var.lib_path}
+              # lib/ déployé par ce bundle, toujours synchrone avec les notebooks
+              lib_path:       ${workspace.file_path}/lib
               # Vide = date du jour. À renseigner (AAAA-MM-JJ) via « Run now with different
               # parameters » pour reprendre un run interrompu : le checkpoint est indexé par
               # date, donc seule cette date permet de retrouver la progression du run coupé.
@@ -145,6 +143,7 @@ resources:
               retain_weekly:  ${var.retain_weekly}
               retain_monthly: ${var.retain_monthly}
               dry_run:        ${var.dry_run}
+              lib_path:       ${workspace.file_path}/lib
               enable_monthly: "true"
               force_snapshot: "false"
               max_parallel:   ${var.max_parallel_monthly}
@@ -183,7 +182,7 @@ resources:
             notebook_path: ./notebooks/demo/07_gameday.py
             base_parameters:
               backup_root: ${var.backup_root}
-              lib_path:    ${var.lib_path}
+              lib_path:    ${workspace.file_path}/lib
           email_notifications:
             on_failure:
               - ${var.notification_email}
@@ -240,7 +239,6 @@ targets:
       host: https://adb-2547670924000766.6.azuredatabricks.net
     variables:
       backup_root: "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup-dev"
-      lib_path: "/Workspace/Shared/dr-backup-dev/lib"
 
   prod:
     mode: production
@@ -249,4 +247,3 @@ targets:
       root_path: /Workspace/Shared/dr-backup/.bundle/${bundle.name}/${bundle.target}
     variables:
       backup_root: "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
-      lib_path: "/Workspace/Shared/dr-backup/lib"
