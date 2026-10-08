@@ -38,6 +38,14 @@ Validé par un test aller-retour complet (backup → sinistre → restauration) 
 | 2.2 | Catalogues fédérés et Delta Sharing exclus (définition relevant de l'IaC). |
 | 2.3 | Traces Java retirées des messages (elles tronquaient la sortie des notebooks). |
 
+## Rapport de couverture (`diag_03_backup_coverage`)
+
+Règles alignées sur la v4.2 corrigée : jobs (tâches et permissions), pipelines, tout le workspace
+(fichiers compris, toute profondeur), metric views couvertes ; tables à filtre de lignes ou masque de
+colonnes signalées « données non sauvegardées » ; une vue en erreur au clone n'est plus comptée comme
+un échec ; alerte si le compte de backup n'a pas `USE CATALOG` sur `system`. Les règles v4.1 restent
+appliquées à un backup v4.1 (jobs sans tâches, seul `/Shared` exporté…).
+
 ## Effets visibles après la mise à jour
 
 - Le **premier run recopie toutes les tables une fois** : plus long que d'habitude.

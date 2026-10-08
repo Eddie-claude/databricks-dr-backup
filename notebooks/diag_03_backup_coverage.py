@@ -169,8 +169,15 @@ def apply_iac(def_cov: str, iac):
     return "IAC" if iac and def_cov == "NONE" else def_cov
 
 
-def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2") -> tuple:
-    """(couverture définition, couverture données, explication) selon la version du backup."""
+def missing_system_access(system_privs: set) -> bool:
+    """Le compte de backup lit information_schema, qui s'appuie sur le catalog system : sans USE
+    CATALOG dessus, le type des tables est illisible (cas client : 4 295 vues envoyées au clone)."""
+    return not ({"USE_CATALOG", "ALL_PRIVILEGES"} & set(system_privs))
+
+
+def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2", protected: bool = False) -> tuple:
+    """(couverture définition, couverture données, explication) selon la version du backup.
+    protected = table soumise à un filtre de lignes ou un masque de colonnes."""
     v42 = version == "v4.2"
     sub, fmt = (sub or "").upper(), (fmt or "").upper()
     if kind == "CATALOG":
@@ -182,11 +189,19 @@ def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2") -> 
     if kind == "SCHEMA":
         return "SCRIPT", "NA", "DDL exporté (uc_metadata/02_schemas.sql)"
     if kind == "TABLE":
-        if sub in ("VIEW", "METRIC_VIEW"):
-            return "SCRIPT", "NA", "DDL de la vue exporté (uc_metadata/03_tables.sql)"
+        if sub == "METRIC_VIEW":
+            if v42:
+                return "SCRIPT", "NA", "Définition YAML exportée (uc_metadata/03_tables.sql, CREATE VIEW … WITH METRICS)"
+            return "NONE", "NA", "Non exportée en v4.1 : SHOW CREATE TABLE refusé sur le runtime des jobs"
+        if sub == "VIEW":
+            return "SCRIPT", "NA", ("DDL de la vue exporté (uc_metadata/03_tables.sql)" if v42 else
+                                    "DDL exporté sans le catalogue en v4.1 : à recréer dans le bon catalogue")
         if sub in ("MATERIALIZED_VIEW", "STREAMING_TABLE"):
             return "SCRIPT", "OTHER", "DDL exporté ; données non clonables, recalculées par refresh / pipeline"
         if sub in ("MANAGED", "EXTERNAL"):
+            if protected:
+                return "SCRIPT", "NONE", ("Filtre de lignes ou masque de colonnes : DEEP CLONE refusé, données "
+                                          "non sauvegardées (exempter le compte de backup ou couvrir autrement)")
             if fmt == "DELTA":
                 return "SCRIPT", "SCRIPT", "DDL + DEEP CLONE incrémental (point-in-time sur la rétention quotidienne)"
             return "SCRIPT", "NONE", f"Format {fmt or 'inconnu'} : DDL exporté, DEEP CLONE non garanti"
@@ -208,9 +223,14 @@ def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2") -> 
     if kind == "MODEL":
         return "NONE", "NONE", "Modèle MLflow : ni définition ni versions sauvegardées"
     if kind == "JOB":
-        return "SCRIPT", "NA", "Définition exportée (jobs/*.json) ; permissions du job non sauvegardées"
+        if v42:
+            return "SCRIPT", "NA", "Définition complète (tâches comprises) et permissions exportées (jobs/*.json)"
+        return "NONE", "NA", "Sauvegardé sans ses tâches en v4.1 : le job serait recréé vide"
     if kind == "PIPELINE":
-        return "NONE", "OTHER", "Définition non sauvegardée (chantier en cours) ; tables recalculées par full refresh"
+        if v42:
+            return "SCRIPT", "OTHER", ("Définition et permissions exportées (pipelines/pipelines_all.json) ; "
+                                       "tables recalculées par full refresh")
+        return "NONE", "OTHER", "Définition non sauvegardée en v4.1 ; tables recalculées par full refresh"
     return "NONE", "NA", "Type non pris en charge"
 
 
@@ -221,22 +241,30 @@ def _ws_parts(path: str) -> list:
     return [p for p in path.strip("/").split("/") if p]
 
 
-def workspace_root_coverage(path: str) -> tuple:
+def workspace_root_coverage(path: str, version: str = "v4.2") -> tuple:
     parts = _ws_parts(path)
     root = parts[0] if parts else ""
-    if root == "Shared":
-        return "SCRIPT", "NONE", (f"Notebooks exportés (sources, {SHARED_EXPORT_DEPTH} niveaux max) ; "
-                                  "fichiers workspace (.sh, .yml, .whl…) non sauvegardés")
     if root == "Repos":
         return "OTHER", "NA", "Contenu dans Git ; URL, branche et ACL sauvegardées"
-    return "NONE", "NONE", "Non exporté (seul /Shared l'est aujourd'hui)"
+    if version == "v4.2":
+        return "SCRIPT", "NA", ("Notebooks, fichiers et dashboards exportés (contenu brut, toute profondeur) "
+                                "avec leurs permissions")
+    if root == "Shared":
+        return "SCRIPT", "NONE", (f"Notebooks exportés (sources, {SHARED_EXPORT_DEPTH} niveaux max) ; "
+                                  "fichiers workspace (.sh, .yml, .whl…) non sauvegardés en v4.1")
+    return "NONE", "NONE", "Non exporté en v4.1 (seul /Shared l'était)"
 
 
-def pipeline_code_covered(paths: list, has_files: bool = False) -> bool:
+def pipeline_code_covered(paths: list, has_files: bool = False, version: str = "v4.2") -> bool:
     """Le code source du pipeline est-il dans le périmètre exporté par 05_workspace_config ?
-    paths = chemins des notebooks du pipeline ; has_files = le pipeline utilise aussi des
-    fichiers workspace (.py, .sql, dossier racine), que 05 n'exporte pas."""
-    if not paths or has_files:
+    paths = chemins des notebooks / fichiers du pipeline ; has_files = le pipeline utilise aussi des
+    fichiers workspace (.py, .sql, dossier racine). v4.2 exporte tout le workspace (fichiers compris)
+    hors /Repos ; v4.1 n'exportait que les notebooks de /Shared, sur 5 niveaux."""
+    if not paths:
+        return False
+    if version == "v4.2":
+        return all((_ws_parts(p) or [""])[0] != "Repos" for p in paths)
+    if has_files:
         return False
     for p in paths:
         parts = _ws_parts(p)
@@ -256,7 +284,9 @@ def verdict(def_cov: str, data_cov: str, excluded: bool = False, accessible=None
         if not iac or data_cov == "SCRIPT":
             return "INACCESSIBLE"
         def_cov = "IAC"
-    if last_status == "error":
+    # Un échec ou un « skipped » au clone ne compte que pour des données clonées : une vue envoyée
+    # au clone (v4.1) y échouait sans conséquence, sa DDL étant exportée à part
+    if last_status in ("error", "skipped") and data_cov == "SCRIPT":
         return "ECHEC"
     if data_cov == "NONE":
         return "PARTIEL"
@@ -343,6 +373,11 @@ volumes   = [r for r in _query("Volumes", f"SELECT * FROM {IS}.volumes WHERE vol
 functions = [r for r in _query("Fonctions", f"SELECT routine_catalog, routine_schema, routine_name, routine_owner, "
                                f"created_by FROM {IS}.routines WHERE routine_schema <> 'information_schema'")
              if _in_scope(r["routine_catalog"])]
+protected_tables = {
+    (r["table_catalog"].lower(), r["table_schema"].lower(), r["table_name"].lower())
+    for view in ("row_filters", "column_masks")
+    for r in _query(f"Tables protégées ({view})",
+                    f"SELECT DISTINCT table_catalog, table_schema, table_name FROM {IS}.{view}")}
 ext_locations = _query("External locations", f"SELECT * FROM {IS}.external_locations")
 credentials   = _query("Storage credentials", f"SELECT * FROM {IS}.storage_credentials")
 connections   = _query("Connexions", f"SELECT * FROM {IS}.connections")
@@ -480,9 +515,9 @@ TYPE_LABELS = {
 }
 rows = []
 
-def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="", accessible=None,
+def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="", accessible=None, protected=False,
         last_status=None, note="", def_cov=None, data_cov=None, iac_force=None, explanation=None):
-    d, data, default_explanation = coverage(kind, sub, fmt, backup_version)
+    d, data, default_explanation = coverage(kind, sub, fmt, backup_version, protected=protected)
     d, data = def_cov or d, data_cov or data
     explanation = explanation or default_explanation
     iac = iac_force or iac_source(name, created_by, iac_identities, iac_names)
@@ -526,6 +561,7 @@ for t in tables:
     add("Metastore", "TABLE", fqn, sub=t["table_type"], fmt=t["data_source_format"], catalog=t["table_catalog"],
         owner=t["table_owner"], created_by=t["created_by"],
         accessible=access("TABLE", t["table_catalog"], t["table_schema"], t["table_name"], t["table_owner"]),
+        protected=(t["table_catalog"].lower(), t["table_schema"].lower(), t["table_name"].lower()) in protected_tables,
         last_status=last_status_by_table.get(fqn.lower()))
 
 for v in volumes:
@@ -572,7 +608,7 @@ for p in pipelines:
     nb_paths, file_paths = _pipeline_sources(spec)
     paths = nb_paths + file_paths
     bundle = (spec.get("deployment") or {}).get("kind") == "BUNDLE"
-    code_ok = pipeline_code_covered(nb_paths, has_files=bool(file_paths))
+    code_ok = pipeline_code_covered(nb_paths + file_paths, has_files=bool(file_paths), version=backup_version)
     add("Workspace", "PIPELINE", spec.get("name") or p.get("name", p.get("pipeline_id", "")),
         catalog=spec.get("catalog", ""), created_by=p.get("creator_user_name"),
         iac_force="bundle" if bundle else None,
@@ -580,7 +616,7 @@ for p in pipelines:
              + (f" ({', '.join(paths[:3])})" if paths else ""))
 
 for path in sorted(ws_roots):
-    d, data, ws_explanation = workspace_root_coverage(path)
+    d, data, ws_explanation = workspace_root_coverage(path, backup_version)
     c = ws_counts.get(path)
     note = f"{c['NOTEBOOK']} notebook(s), {c['FILE']} fichier(s), {c['DASHBOARD']} dashboard(s)" if c else ""
     add("Workspace", "WORKSPACE", path, def_cov=d, data_cov=data, note=note, explanation=ws_explanation)
@@ -726,8 +762,16 @@ def _table(frame, index_name: str) -> str:
 
 attention = []
 if backup_version == "v4.1":
-    attention.append("La version déployée est la <b>v4.1</b> : volumes et fonctions ne sont pas encore "
-                     "sauvegardés. La v4.2 (développée) couvre leurs définitions et leurs permissions.")
+    attention.append("La version déployée est la <b>v4.1</b> : volumes, fonctions, metric views et pipelines ne "
+                     "sont pas sauvegardés, les jobs le sont sans leurs tâches et seul /Shared est exporté. "
+                     "La v4.2 couvre ces objets.")
+if access_checked and missing_system_access(cat_p.get(("system",), set())):
+    attention.append(f"Le compte de backup <code>{e(backup_principal)}</code> n'a pas USE CATALOG sur le catalog "
+                     "<b>system</b> : information_schema lui est illisible, le backup lit alors le type des tables "
+                     "via l'API (plus lent). <code>GRANT USE CATALOG ON CATALOG system TO …</code>")
+if protected_tables:
+    attention.append(f"<b>{len(protected_tables)}</b> table(s) protégée(s) par un filtre de lignes ou un masque de "
+                     "colonnes : DEEP CLONE les refuse, leurs données ne sont pas sauvegardées.")
 if totals.get("INACCESSIBLE"):
     attention.append(f"<b>{totals['INACCESSIBLE']}</b> objet(s) seraient sauvegardés par le script mais le compte "
                      f"de backup <code>{e(backup_principal)}</code> n'a pas les droits nécessaires "

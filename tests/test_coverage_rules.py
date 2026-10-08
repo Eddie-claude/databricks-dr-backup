@@ -74,11 +74,30 @@ def test_iac_file_names_are_case_and_backtick_insensitive():
     ("EXTERNAL_LOCATION", "", "", "v4.2", ("NONE", "NA")),
     ("MODEL",   "",         "", "v4.2", ("NONE", "NONE")),
     ("JOB",     "",         "", "v4.2", ("SCRIPT", "NA")),
-    ("PIPELINE", "",        "", "v4.2", ("NONE", "OTHER")),
+    # v4.1 : jobs sauvegardés sans leurs tâches (expand_tasks ignoré) → recréés vides
+    ("JOB",     "",         "", "v4.1", ("NONE", "NA")),
+    ("PIPELINE", "",        "", "v4.2", ("SCRIPT", "OTHER")),
+    ("PIPELINE", "",        "", "v4.1", ("NONE", "OTHER")),
+    # metric views : SHOW CREATE TABLE refusé sur le runtime des jobs en v4.1, DDL reconstruite en v4.2
+    ("TABLE",   "METRIC_VIEW", "", "v4.2", ("SCRIPT", "NA")),
+    ("TABLE",   "METRIC_VIEW", "", "v4.1", ("NONE", "NA")),
 ])
 def test_coverage_rules(kind, sub, fmt, version, expected):
     d, data, _note = R["coverage"](kind, sub, fmt, version)
     assert (d, data) == expected
+
+
+def test_table_with_row_filter_or_column_mask_has_no_data_coverage():
+    # DEEP CLONE refuse les tables protégées : leurs données ne sont jamais sauvegardées
+    d, data, note = R["coverage"]("TABLE", "MANAGED", "DELTA", "v4.2", protected=True)
+    assert (d, data) == ("SCRIPT", "NONE")
+    assert "filtre" in note.lower()
+
+
+def test_system_catalog_use_is_required_for_information_schema():
+    assert R["missing_system_access"](set()) is True
+    assert R["missing_system_access"]({"USE_CATALOG"}) is False
+    assert R["missing_system_access"]({"ALL_PRIVILEGES"}) is False
 
 
 def test_iac_replaces_missing_definition_but_not_script():
@@ -89,24 +108,37 @@ def test_iac_replaces_missing_definition_but_not_script():
 
 # ── Espace de travail ────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("path,expected", [
-    ("/Shared",   ("SCRIPT", "NONE")),
-    ("/Users",    ("NONE", "NONE")),
-    ("/Repos",    ("OTHER", "NA")),
-    ("/Projets",  ("NONE", "NONE")),
+@pytest.mark.parametrize("path,version,expected", [
+    ("/Shared",   "v4.1", ("SCRIPT", "NONE")),
+    ("/Users",    "v4.1", ("NONE", "NONE")),
+    ("/Repos",    "v4.1", ("OTHER", "NA")),
+    ("/Projets",  "v4.1", ("NONE", "NONE")),
+    # v4.2 : tout le workspace (notebooks, fichiers, dashboards), toute profondeur, hors /Repos
+    ("/Shared",   "v4.2", ("SCRIPT", "NA")),
+    ("/Users",    "v4.2", ("SCRIPT", "NA")),
+    ("/Projets",  "v4.2", ("SCRIPT", "NA")),
+    ("/Repos",    "v4.2", ("OTHER", "NA")),
 ])
-def test_workspace_root_coverage(path, expected):
-    d, data, _ = R["workspace_root_coverage"](path)
+def test_workspace_root_coverage(path, version, expected):
+    d, data, _ = R["workspace_root_coverage"](path, version)
     assert (d, data) == expected
 
 
-def test_pipeline_code_is_covered_only_under_shared_within_depth():
+def test_pipeline_code_is_covered_only_under_shared_within_depth_in_v41():
     covered = R["pipeline_code_covered"]
-    assert covered(["/Workspace/Shared/etl/ingest", "/Shared/etl/clean"]) is True
-    assert covered(["/Shared/a/b/c/d/nb"]) is True          # 5 niveaux sous /Shared : exporté
-    assert covered(["/Shared/a/b/c/d/e/nb"]) is False       # 6 niveaux : au-delà de max_depth
-    assert covered(["/Shared/etl/x", "/Users/u@x.ch/y"]) is False
-    assert covered([]) is False
+    assert covered(["/Workspace/Shared/etl/ingest", "/Shared/etl/clean"], version="v4.1") is True
+    assert covered(["/Shared/a/b/c/d/nb"], version="v4.1") is True          # 5 niveaux : exporté
+    assert covered(["/Shared/a/b/c/d/e/nb"], version="v4.1") is False       # 6 niveaux : au-delà
+    assert covered(["/Shared/etl/x", "/Users/u@x.ch/y"], version="v4.1") is False
+    assert covered([], version="v4.1") is False
+
+
+def test_pipeline_code_is_covered_anywhere_but_repos_in_v42():
+    covered = R["pipeline_code_covered"]
+    assert covered(["/Users/u@x.ch/a/b/c/d/e/f/nb"], version="v4.2") is True
+    assert covered(["/Shared/etl/nb"], has_files=True, version="v4.2") is True   # fichiers exportés
+    assert covered(["/Repos/u/projet/nb"], version="v4.2") is False              # contenu dans Git
+    assert covered([], version="v4.2") is False
 
 
 # ── Verdict ──────────────────────────────────────────────────────────────
@@ -122,6 +154,11 @@ def test_pipeline_code_is_covered_only_under_shared_within_depth():
     (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=False), "INACCESSIBLE"),
     (dict(def_cov="IAC", data_cov="NA", accessible=False), "AS_CODE"),
     (dict(def_cov="SCRIPT", data_cov="SCRIPT", last_status="error"), "ECHEC"),
+    # table ignorée au clone (non clonable) : ses données manquent au backup
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", last_status="skipped"), "ECHEC"),
+    # vue en erreur ou ignorée au clone (cas client v4.1) : sa DDL est exportée à part, pas un échec
+    (dict(def_cov="SCRIPT", data_cov="NA", last_status="error"), "OK"),
+    (dict(def_cov="SCRIPT", data_cov="NA", last_status="skipped"), "OK"),
     (dict(def_cov="SCRIPT", data_cov="SCRIPT", excluded=True), "EXCLU"),
 ])
 def test_verdict(kwargs, expected):
@@ -144,7 +181,7 @@ def test_iac_rescues_inaccessible_object_without_data():
     assert R["verdict"]("SCRIPT", "SCRIPT", accessible=False, iac=True) == "INACCESSIBLE"
 
 
-def test_pipeline_files_are_not_covered_only_notebooks():
+def test_pipeline_files_are_not_covered_only_notebooks_in_v41():
     covered = R["pipeline_code_covered"]
-    assert covered(["/Shared/etl/nb"], has_files=True) is False
-    assert covered(["/Shared/etl/nb"], has_files=False) is True
+    assert covered(["/Shared/etl/nb"], has_files=True, version="v4.1") is False
+    assert covered(["/Shared/etl/nb"], has_files=False, version="v4.1") is True
