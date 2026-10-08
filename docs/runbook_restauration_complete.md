@@ -45,7 +45,19 @@ Il distingue deux scénarios :
 
 ### Avant de restaurer : savoir ce qui est restaurable
 
-Le notebook `diag_03_backup_coverage` (lecture seule, compte admin du metastore) produit un rapport HTML + Excel qui indique pour chaque objet du metastore et du workspace s'il est restaurable par le backup, par l'IaC, par un autre moyen — ou pas du tout. À tenir à jour et à consulter avant un exercice de restauration.
+Le notebook `diag_03_backup_coverage` (lecture seule, compte admin du metastore) produit un rapport HTML + Excel qui indique pour chaque objet du metastore et du workspace s'il est restaurable par le backup, par l'IaC, par un autre moyen — ou pas du tout. À tenir à jour et à consulter avant un exercice de restauration. Toujours renseigner `backup_root` (sinon les règles v4.1 sont appliquées) et `backup_principal`.
+
+| Verdict | Lecture | Action |
+|---------|---------|--------|
+| ✅ Sauvegardé et restaurable | Définition et données couvertes | — |
+| 🔵 As code | Recréé par Terraform / le bundle | Vérifier l'IaC |
+| ⚪ Autre moyen | Git, recalcul de pipeline, données dans la source | Documenter au plan de reprise |
+| 🟡 Partiel | Définition couverte, données non (table protégée, format non clonable) | Fiche de reconstruction (§5 ci-dessous) |
+| 🔴 Inaccessible au backup | Le compte de backup n'a pas les droits | `dr-backup-grants-sync` en mode `apply` |
+| 🔴 Échec au dernier backup | Table en erreur / non copiée au dernier run | Lire la cause dans le rapport du backup |
+| 🔴 Non couvert | Ni backup ni IaC | Couvrir en IaC ou accepter le risque |
+
+Pour les tables protégées (filtre de lignes, masque de colonnes), `diag_04_protected_tables`, lancé **sous l'identité du job de backup** (« Run as »), indique si ce compte voit toutes les lignes et les valeurs réelles : `COMPLETE`, `LIGNES_FILTREES`, `VALEURS_MASQUEES`, `INDETERMINE`.
 
 ---
 
@@ -455,6 +467,24 @@ databricks workspace ls /Shared
 | **Users / Groups** | Synchronisation Entra ID → automatique à la reconnexion |
 | **Clusters / Cluster Policies** | Recréer manuellement (non sauvegardés) |
 | **SQL Warehouses** | Recréer manuellement (non sauvegardés) |
+| **Tables à filtre de lignes / masque de colonnes** | Recréées **vides** (DEEP CLONE refusé) : à reconstruire par l'équipe propriétaire, voir ci-dessous |
+
+### Tables dont les données ne sont pas sauvegardées
+
+Elles figurent en « Partiel » dans le rapport de couverture et dans la liste « Tables non sauvegardées » du rapport de chaque backup. La restauration recrée la table (vide) et le job ou pipeline qui l'alimente ; **l'équipe propriétaire relance ce traitement** pour la remplir depuis sa source.
+
+Retrouver le traitement qui écrit dans la table :
+
+```sql
+SELECT DISTINCT entity_type, entity_id, created_by, max(event_time) AS derniere_ecriture
+FROM system.access.table_lineage
+WHERE target_table_full_name = '<catalog>.<schema>.<table>'
+GROUP BY ALL ORDER BY derniere_ecriture DESC;
+```
+
+> ⚠️ Vérifier que la source permet un rechargement **complet**. Un chargement incrémental ou une source qui purge son historique ne reconstruit qu'une partie de la table : envisager alors une copie par lecture (si `diag_04` donne `COMPLETE`) ou un filtre porté par une vue.
+
+Fiche à tenir au plan de reprise pour chacune : table · raison (filtre / masque / format) · équipe et contact · job ou pipeline à relancer et paramètres d'un chargement complet · source et profondeur d'historique · données qui seront perdues · durée estimée.
 
 ---
 

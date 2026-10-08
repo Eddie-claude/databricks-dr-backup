@@ -499,6 +499,12 @@ numbered(doc, "Toujours dans votre databricks.yml : supprimer la variable lib_pa
               "cibles), remplacer ${var.lib_path} par ${workspace.file_path}/lib dans les paramètres "
               "des jobs, et ajouter lib_path: ${workspace.file_path}/lib aux paramètres du job "
               "dr-backup-monthly (sans effet dans cette version, requis par la suivante).")
+numbered(doc, "Toujours dans votre databricks.yml : ajouter le job dr_backup_grants_sync (bloc complet à copier "
+              "depuis le databricks.yml de l'archive) et ses trois variables : backup_principal (compte ou "
+              "groupe du backup), backup_location (nom de l'External Location du backup), grants_sync_mode "
+              "(report, puis apply une fois validé). Voir guide de déploiement §8.")
+numbered(doc, "Accorder au compte du backup USE CATALOG sur le catalog system : "
+              "GRANT USE CATALOG ON CATALOG system TO `<compte du backup>`.")
 numbered(doc, "Vérifier que le quota de vCPU de la famille ESv3 permet 8 vCPU supplémentaires dans la région, et qu'aucune politique de cluster n'interdit Standard_E8s_v3.")
 numbered(doc, "databricks bundle validate --target <cible> — vérifier les lignes Host: et User:.")
 numbered(doc, "databricks bundle deploy --target <cible>.")
@@ -536,6 +542,9 @@ bullet(doc, "Sortie de 01_uc_metadata : aucun avertissement « lib/uc_ddl.py int
 bullet(doc, "Rapport du jour : lire les tables non clonables et en erreur, et décider de leur couverture.")
 bullet(doc, "Fichier jobs/jobs_all.json du jour : chaque job contient ses tâches (champ tasks).")
 bullet(doc, "Sortie de workspace_config : « Erreurs d'export : 0 ».")
+bullet(doc, "Rapport de couverture (diag_03, avec backup_root et backup_principal) : traiter les objets "
+            "« à traiter » (guide §3.4) ; contrôler les tables protégées avec diag_04 sous l'identité du "
+            "backup (guide §3.5) et rédiger leurs fiches de reconstruction (guide §9.3).")
 bullet(doc, "Sortie de 01_uc_metadata : les lignes [SKIP] correspondent bien à vos catalogs fédérés.")
 
 add_note(

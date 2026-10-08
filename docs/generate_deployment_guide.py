@@ -134,6 +134,9 @@ add_heading(doc, "1.2 Ce que la solution ne sauvegarde pas", 2)
 
 bullet(doc, "Les tables non Delta (Parquet externe, CSV, formats propriétaires) — ignorées avec un message explicite")
 bullet(doc, "Les vues matérialisées et les Streaming Tables (non clonables)")
+bullet(doc, "Les données des tables protégées par un filtre de lignes ou un masque de colonnes : "
+            "DEEP CLONE les refuse quel que soit le compte. Leur définition est sauvegardée, leurs "
+            "données sont à reconstruire (§3.5, §9.3)")
 bullet(doc, "Les secrets et les scopes de secrets Databricks")
 bullet(doc, "Les catalogs système : hive_metastore, system, samples")
 bullet(doc, "Les catalogs fédérés (Lakehouse Federation) et Delta Sharing : leurs données restent dans la "
@@ -502,20 +505,120 @@ add_table(
     doc,
     ["Paramètre", "Rôle"],
     [
-        ["backup_principal", "Groupe ou service principal du backup : vérifie qu'il a les droits sur chaque objet"],
+        ["backup_principal", "Groupe ou service principal du backup : vérifie qu'il a les droits sur chaque objet (vide = non vérifié)"],
+        ["backup_root", "Racine du backup : contrôle le résultat du dernier backup réel et détecte la version déployée"],
+        ["backup_version", "auto (détectée depuis backup_root), v4.1 ou v4.2 : règles de couverture appliquées"],
         ["iac_identities", "Identités qui déploient l'IaC : les objets qu'elles ont créés sont classés « as code »"],
         ["iac_file", "Liste optionnelle d'objets gérés en code, un nom complet par ligne"],
         ["excluded_catalogs", "Catalogs exclus volontairement (tests, bacs à sable)"],
-        ["backup_root", "Racine du backup : contrôle le résultat du dernier backup réel"],
+        ["count_workspace_objects", "Compter les notebooks et fichiers par dossier du workspace (plus long)"],
+        ["output_dir", "Dossier du workspace où écrire le HTML et l'Excel (vide = dossier personnel)"],
     ],
     col_widths=[4, 12],
 )
 
 add_note(
     doc,
-    "à exécuter avec un compte admin du metastore, qui voit tous les objets. Le rapport est "
-    "conçu pour être présenté tel quel : synthèse par type et par catalog, objets à traiter, "
-    "légende des moyens de restauration.",
+    "à exécuter avec un compte admin du metastore, qui voit tous les objets. Toujours renseigner "
+    "backup_root : sans lui, le rapport ne peut pas déterminer la version déployée et applique par "
+    "prudence les règles de la v4.1, qui classent à tort volumes, fonctions et pipelines en « non couvert ».",
+)
+
+add_heading(doc, "Lire le rapport", 3)
+
+doc.add_paragraph(
+    "L'en-tête indique les règles appliquées (« règles du backup v4.2 · dernier backup … ») puis les "
+    "points d'attention : version, objets inaccessibles au compte de backup, tables protégées, droit "
+    "manquant sur le catalog system. Viennent ensuite une synthèse par type et par catalog, puis le "
+    "détail objet par objet (onglet de détail de l'Excel), dont voici les colonnes :"
+)
+
+add_table(
+    doc,
+    ["Colonne", "Signification"],
+    [
+        ["Définition", "Comment la définition est restaurée : Script backup, As code, Autre moyen, Non couvert"],
+        ["Données", "Comment les données sont restaurées (mêmes valeurs ; — = sans objet, par exemple une vue)"],
+        ["As code", "Oui si l'objet a été créé par une identité IaC ou figure dans iac_file"],
+        ["Accès backup", "Oui / NON : droits du compte de backup sur l'objet ; — = non vérifié (backup_principal vide)"],
+        ["Dernier backup", "Résultat de la table au dernier backup : success, skipped (non clonable), error, absent (pas dans la liste du jour)"],
+        ["Verdict", "Synthèse, voir ci-dessous"],
+        ["Explication", "Pourquoi ce verdict, et ce qu'il faut faire le cas échéant"],
+    ],
+    col_widths=[3.5, 12.5],
+)
+
+add_table(
+    doc,
+    ["Verdict", "Signification", "Action"],
+    [
+        ["✅ Sauvegardé et restaurable", "Définition et données couvertes par le backup", "Aucune"],
+        ["🔵 As code (IaC)", "Recréé par Terraform ou le bundle", "Vérifier que l'IaC est à jour"],
+        ["⚪ Autre moyen", "Couvert hors backup : Git, recalcul d'un pipeline, données dans la source", "Documenter le moyen au plan de reprise"],
+        ["🟡 Partiel", "Définition couverte, données non (format non clonable, table protégée)", "Plan de reconstruction (§9.3)"],
+        ["🔴 Couvert mais inaccessible au backup", "Prévu par le script, mais le compte de backup n'a pas les droits", "Accorder les droits (§2.5, job dr-backup-grants-sync)"],
+        ["🔴 Échec au dernier backup", "Table en erreur ou non copiée au dernier backup", "Lire la cause dans le rapport du backup du jour"],
+        ["🔴 Non couvert", "Ni le backup ni l'IaC ne le recréent", "Le couvrir en IaC, ou accepter le risque"],
+        ["⚫ Exclu volontairement", "Catalog listé dans excluded_catalogs", "Aucune"],
+    ],
+    col_widths=[4.5, 6.5, 5],
+)
+
+add_heading(doc, "3.5 Visibilité des tables protégées pour le compte de backup", 2)
+
+doc.add_paragraph(
+    "DEEP CLONE refuse les tables portant un filtre de lignes ou un masque de colonnes, quel que soit le "
+    "compte : leurs données ne sont pas sauvegardées (verdict « Partiel » du §3.4). Pour savoir si une "
+    "copie par lecture de ces tables serait possible, le notebook diag_04_protected_tables.py appelle "
+    "chaque fonction de filtre et de masque avec des valeurs de test, sous l'identité qui l'exécute."
+)
+
+add_warning(
+    doc,
+    "le résultat vaut pour le compte qui exécute le notebook. Le lancer sous l'identité du job de "
+    "backup : Workflows → créer un job à une tâche (notebook diag_04_protected_tables), puis dans les "
+    "paramètres du job, « Run as » = le service principal du backup. Lancé avec un compte "
+    "administrateur, il indiquerait ce que voit cet administrateur, pas le backup.",
+)
+
+add_table(
+    doc,
+    ["Paramètre", "Rôle"],
+    [
+        ["catalog_filter", "Catalogs à contrôler, séparés par des virgules (vide = tous)"],
+        ["output_dir", "Dossier du workspace où écrire un rapport HTML (vide = résultat affiché seulement)"],
+    ],
+    col_widths=[4, 12],
+)
+
+doc.add_paragraph("Prérequis : USE CATALOG sur le catalog system et EXECUTE sur les fonctions de filtre et de masque.")
+
+add_table(
+    doc,
+    ["Verdict", "Signification"],
+    [
+        ["COMPLETE", "Le compte voit toutes les lignes et les valeurs réelles : une copie par lecture serait complète"],
+        ["LIGNES_FILTREES", "Le filtre cache des lignes à ce compte : une copie serait incomplète"],
+        ["VALEURS_MASQUEES", "Des colonnes sont masquées pour ce compte : une copie contiendrait des valeurs masquées"],
+        ["INDETERMINE", "Une fonction n'a pas pu être appelée (droit EXECUTE, type non testable) : vérifier à la main"],
+    ],
+    col_widths=[4, 12],
+)
+
+add_note(
+    doc,
+    "is_account_group_member() teste un groupe du compte Databricks, pas un groupe local au "
+    "workspace. Une exemption écrite is_account_group_member('admins') ne s'applique pas à un membre "
+    "du groupe admins du workspace. Pour exempter le compte de backup, utiliser un groupe de compte.",
+)
+
+doc.add_paragraph("Vérification manuelle d'une table, avec un compte administrateur :")
+
+add_code(
+    doc,
+    "SELECT * FROM system.information_schema.row_filters   WHERE table_name = '<table>';\n"
+    "SELECT * FROM system.information_schema.column_masks  WHERE table_name = '<table>';\n"
+    "DESCRIBE FUNCTION EXTENDED <catalog>.<schema>.<fonction>;",
 )
 
 doc.add_page_break()
@@ -1140,10 +1243,31 @@ add_table(
     doc,
     ["Job", "Planification par défaut", "Délai maximal"],
     [
+        ["dr-backup-grants-sync", "Chaque nuit à 00:30 UTC, avant le backup", "30 minutes"],
         ["dr-backup-daily", "Chaque nuit à 01:00 UTC", "8 heures"],
         ["dr-backup-monthly", "Le 1er de chaque mois à 02:00 UTC", "24 heures"],
     ],
     col_widths=[4.5, 7, 4.5],
+)
+
+add_heading(doc, "Synchronisation automatique des droits (dr-backup-grants-sync)", 3)
+
+doc.add_paragraph(
+    "Ce job rend le backup autonome face aux nouveaux catalogs : il compare chaque jour les droits du "
+    "compte de backup à ceux requis (USE CATALOG, USE SCHEMA, BROWSE, SELECT, READ VOLUME, EXECUTE sur "
+    "chaque catalog standard ; READ FILES et WRITE FILES sur l'External Location ; USE CATALOG sur "
+    "system). Les droits posés au niveau du catalog couvrent tous ses objets, présents et futurs : seul "
+    "un nouveau catalog est à rattraper."
+)
+bullet(doc, "Mode report (défaut) : constat seul. En cas d'écart, le job échoue, ce qui déclenche la "
+            "notification ; sa sortie liste chaque objet (OK / manquant) et les GRANT à accorder.")
+bullet(doc, "Mode apply : le job accorde lui-même les droits manquants. C'est le mode à retenir en "
+            "exploitation, une fois le mode report validé sur un run.")
+add_note(
+    doc,
+    "le job s'exécute avec l'identité qui déploie le bundle, qui doit être admin du metastore pour "
+    "accorder les droits. Préférer un service principal d'administration à un compte nominatif, pour "
+    "ne pas dépendre d'une personne.",
 )
 
 add_note(
@@ -1271,6 +1395,49 @@ add_warning(
     "façon autoritaire (databricks_grants), ne pas rejouer ceux du backup sur ces objets.",
 )
 
+add_heading(doc, "9.3 Tables dont les données ne sont pas sauvegardées : plan de reconstruction", 2)
+
+doc.add_paragraph(
+    "Certaines tables sont recréées vides par la restauration : tables à filtre de lignes ou masque de "
+    "colonnes, formats non clonables. Elles apparaissent en « Partiel » dans le rapport de couverture "
+    "(§3.4) et dans la liste « Tables non sauvegardées » du rapport de chaque backup. Leur "
+    "reconstruction revient à l'équipe propriétaire de la table, en relançant le traitement qui "
+    "l'alimente depuis sa source ; la solution restaure la définition de la table et celle du job ou "
+    "du pipeline qui l'alimente."
+)
+
+doc.add_paragraph("Retrouver le traitement qui écrit dans la table (lignage Unity Catalog) :")
+add_code(doc, "SELECT DISTINCT entity_type, entity_id, created_by, max(event_time) AS derniere_ecriture\nFROM system.access.table_lineage\nWHERE target_table_full_name = '<catalog>.<schema>.<table>'\nGROUP BY ALL ORDER BY derniere_ecriture DESC;")
+doc.add_paragraph(
+    "entity_type et entity_id désignent le job, le pipeline ou le notebook qui écrit dans la table. "
+    "L'onglet Lineage de la table dans Catalog Explorer donne la même information. Accès requis aux "
+    "tables système system.access."
+)
+
+add_warning(
+    doc,
+    "vérifier que la source permet un rechargement complet. Un chargement incrémental, ou une source "
+    "qui purge son historique, ne reconstruit qu'une partie de la table. Dans ce cas, envisager une "
+    "copie par lecture (si diag_04 donne COMPLETE pour le compte de backup) ou porter le filtre par une "
+    "vue plutôt que par la table, pour qu'elle redevienne clonable.",
+)
+
+doc.add_paragraph("Fiche à tenir au plan de reprise pour chacune de ces tables :")
+add_table(
+    doc,
+    ["Rubrique", "Contenu"],
+    [
+        ["Table", "catalog.schema.table"],
+        ["Raison", "Filtre de lignes / masque de colonnes / format non clonable"],
+        ["Responsable", "Équipe propriétaire et contact nominatif"],
+        ["Traitement à relancer", "Job ou pipeline, paramètres d'un chargement complet"],
+        ["Source", "Système d'origine et profondeur d'historique disponible"],
+        ["Données perdues", "Ce que la reconstruction ne retrouvera pas"],
+        ["Durée estimée", "Temps de reconstruction"],
+    ],
+    col_widths=[4, 12],
+)
+
 doc.add_page_break()
 
 
@@ -1289,6 +1456,8 @@ add_table(
         ["", "Service Principal créé et déclaré dans Databricks", "2.6"],
         ["", "CLI Databricks installée, version 0.2xx ou supérieure", "2.7"],
         ["", "Audit exécuté, tables à optimiser identifiées", "3.1"],
+        ["", "Rapport de couverture lu, objets « à traiter » pris en charge", "3.4"],
+        ["", "Tables protégées contrôlées sous l'identité du backup (diag_04)", "3.5"],
         ["", "OPTIMIZE réalisé sur les tables signalées", "3.3"],
         ["", "databricks.yml adapté à l'environnement", "4.2"],
         ["", "Profil CLI configuré et connexion vérifiée", "4.3"],
@@ -1299,7 +1468,9 @@ add_table(
         ["", "Les 8 points de validation sont vérifiés", "7"],
         ["", "Alerte d'échec testée volontairement", "8"],
         ["", "Restauration testée en simulation", "9"],
+        ["", "dr-backup-grants-sync validé en report puis passé en apply", "8"],
         ["", "Planifications activées", "8"],
+        ["", "Fiches de reconstruction rédigées pour les tables non sauvegardées", "9.3"],
     ],
     col_widths=[1.5, 11, 3.5],
 )
