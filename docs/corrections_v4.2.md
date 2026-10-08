@@ -10,7 +10,7 @@ Validé par un test aller-retour complet (backup → sinistre → restauration) 
 |---|---|
 | 2.8 | **Jobs sauvegardés sans leurs tâches** : une restauration recréait des jobs vides. Les backups antérieurs à la 4.2 ne permettent pas de restaurer les jobs. |
 | 2.9 | **Workspace incomplet** : les objets refusés par l'API (HTTP 429, trop de requêtes) étaient perdus sans erreur — tout `/Shared` manquait sur KeyIT. Réessais, parallélisme 4, l'étape échoue si l'export est incomplet. |
-| 2.12 | **Tables non sauvegardées invisibles** : le rapport affichait les tables découvertes. Il détaille désormais sauvegardées / non clonables / en erreur, avec la liste et la cause ; statut « degraded » en cas d'erreur de clone ; les vues ne partent plus au clone si `information_schema` est illisible. |
+| 2.12 | **Tables non sauvegardées invisibles** : le rapport affichait les tables découvertes. Il détaille désormais sauvegardées / non clonables / en erreur, avec la liste et la cause ; statut « degraded » en cas d'erreur de clone ; les vues ne partent plus au clone si `information_schema` est illisible (cause chez le client : pas de `USE CATALOG` sur `system`, droit désormais documenté et vérifié par `dr-backup-grants-sync`). |
 | 2.13 | **Table supprimée puis recréée non recopiée** si sa version Delta retombait au même numéro : le backup gardait les données de l'ancienne table. |
 | 2.4 | **Droits hérités exportés comme directs** : une restauration les aurait matérialisés objet par objet. |
 
@@ -23,6 +23,7 @@ Validé par un test aller-retour complet (backup → sinistre → restauration) 
 | 2.15 | **`07` restaurait des tables périmées** (présentes dans le stockage mais absentes du backup du jour) : sélection d'après le manifest de la date de référence, `include_stale` pour les inclure. |
 | 2.16 | **L'orchestrateur de restauration reprenait tout** (workspace de tous les utilisateurs, tous les pipelines, tous les volumes) : `notebook_filter`, `pipeline_filter`, `volume_filter`. |
 | 2.6 | Le corps des fonctions Python gagnait des lignes vides à chaque cycle backup → restauration. |
+| 2.17 | **Metric views absentes du backup** : `SHOW CREATE TABLE` les refuse sur le runtime des jobs. Définition reconstruite depuis leur YAML (`CREATE VIEW … WITH METRICS`). |
 
 ## Fiabilité du job de backup
 

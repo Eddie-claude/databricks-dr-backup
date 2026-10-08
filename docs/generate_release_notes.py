@@ -331,6 +331,16 @@ doc.add_paragraph(
     "(catalogue.schéma.volume, jokers acceptés)."
 )
 
+add_heading(doc, "2.17 Metric views absentes du backup", 2)
+
+doc.add_paragraph(
+    "Sur le runtime des jobs, SHOW CREATE TABLE refuse les metric views "
+    "(UNSUPPORTED_SHOW_CREATE_TABLE.ON_METRIC_VIEW) : leur définition n'était pas exportée et une "
+    "restauration ne les recréait pas. Elle est désormais reconstruite depuis leur définition YAML "
+    "(CREATE VIEW … WITH METRICS), commentaire compris, et exportée avec les autres vues dans "
+    "03_tables.sql. Vérifié par une recréation depuis le backup : même type, mêmes résultats."
+)
+
 doc.add_page_break()
 
 

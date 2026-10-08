@@ -56,7 +56,8 @@ sys.path.insert(0, lib_path)
 # Étape critique du backup : un lib/ pas encore redéployé ne doit pas la faire échouer,
 # seul l'export volumes/fonctions est alors sauté (signalé dans le résultat).
 try:
-    from uc_ddl import build_catalog_ddl, build_function_ddl, build_volume_ddl, qualify_create_name
+    from uc_ddl import (build_catalog_ddl, build_function_ddl, build_metric_view_ddl, build_volume_ddl,
+                        qualify_create_name)
     uc_objects_error = None
 except ImportError as e:
     uc_objects_error = f"lib/uc_ddl.py introuvable dans {lib_path} : {e}"
@@ -64,6 +65,7 @@ except ImportError as e:
     # Formes historiques, sans emplacement ni catalogue dans le nom des vues
     build_catalog_ddl = lambda name, storage_root, comment: f"CREATE CATALOG IF NOT EXISTS `{name}`;"
     qualify_create_name = lambda ddl, catalog, schema, name: ddl
+    build_metric_view_ddl = None
 
 assert backup_root.startswith("abfss://"), "backup_root doit commencer par abfss://"
 
@@ -195,7 +197,17 @@ for catalog in catalogs:
         for t in tables:
             fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
             try:
-                ddl_row = spark.sql(f"SHOW CREATE TABLE {fqn}").collect()[0][0]
+                try:
+                    ddl_row = spark.sql(f"SHOW CREATE TABLE {fqn}").collect()[0][0]
+                except Exception as e_show:
+                    # SHOW CREATE TABLE refuse les metric views sur certains runtimes : définition
+                    # reconstruite depuis le YAML (view_text) de DESCRIBE TABLE EXTENDED … AS JSON
+                    if "ON_METRIC_VIEW" not in str(e_show) or build_metric_view_ddl is None:
+                        raise
+                    info = json.loads(spark.sql(f"DESCRIBE TABLE EXTENDED {fqn} AS JSON").collect()[0][0])
+                    ddl_row = build_metric_view_ddl(catalog, schema, t.tableName, info["view_text"],
+                                                    info.get("comment"))
+                    print(f"[OK] Metric view {catalog}.{schema}.{t.tableName} : DDL reconstruite depuis sa définition YAML")
                 table_ddls.append(qualify_create_name(ddl_row, catalog, schema, t.tableName) + ";")
                 # Ajouter à la liste de clone uniquement si c'est une table réelle
                 if cloneable_tables is None or t.tableName in cloneable_tables:

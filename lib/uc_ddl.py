@@ -45,6 +45,20 @@ _CREATE_NAME = re.compile(
     re.IGNORECASE)
 
 
+def build_metric_view_ddl(catalog: str, schema: str, name: str, yaml_text: str,
+                          comment: Optional[str]) -> str:
+    """CREATE VIEW … WITH METRICS depuis la définition YAML (DESCRIBE TABLE EXTENDED … AS JSON,
+    champ view_text) : SHOW CREATE TABLE refuse les metric views sur certains runtimes
+    (UNSUPPORTED_SHOW_CREATE_TABLE.ON_METRIC_VIEW), leur définition manquait alors au backup."""
+    body = yaml_text.strip("\r\n")
+    tag = "$$" if "$$" not in body else "$mv$"
+    lines = [f"CREATE VIEW {_fqn(catalog, schema, name)}"]
+    if comment:
+        lines.append(f"  COMMENT {sql_string(comment)}")
+    lines += ["  WITH METRICS", "  LANGUAGE YAML", f"AS {tag}\n{body}\n{tag}"]
+    return "\n".join(lines)
+
+
 def qualify_create_name(ddl: str, catalog: str, schema: str, name: str) -> str:
     """Remplace le nom de l'objet créé par catalog.schema.nom : SHOW CREATE TABLE renvoie les vues
     sous la forme « schema.vue », que la restauration créait dans le catalogue courant."""

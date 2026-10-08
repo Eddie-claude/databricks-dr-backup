@@ -259,3 +259,30 @@ def test_qualify_handles_backticks_and_or_replace():
 def test_qualify_leaves_unrecognised_ddl_untouched():
     assert qualify_create_name("ALTER TABLE x SET TBLPROPERTIES ()", "c", "s", "x") == \
         "ALTER TABLE x SET TBLPROPERTIES ()"
+
+
+# ── Metric views ─────────────────────────────────────────────────────────
+
+from lib.uc_ddl import build_metric_view_ddl
+
+_YAML = "\nversion: 0.1\nsource: c.finance.transactions\nmeasures:\n  - name: total\n    expr: SUM(montant)\n"
+
+
+def test_metric_view_ddl_rebuilt_from_its_yaml():
+    # SHOW CREATE TABLE refuse les metric views sur le runtime du job
+    # (UNSUPPORTED_SHOW_CREATE_TABLE.ON_METRIC_VIEW) : leur définition manquait au backup
+    ddl = build_metric_view_ddl("c", "finance", "mv_ca", _YAML, "Chiffre d'affaires")
+    assert ddl == ("CREATE VIEW `c`.`finance`.`mv_ca`\n"
+                   "  COMMENT 'Chiffre d\\'affaires'\n"
+                   "  WITH METRICS\n"
+                   "  LANGUAGE YAML\n"
+                   "AS $$\n"
+                   "version: 0.1\nsource: c.finance.transactions\nmeasures:\n  - name: total\n    expr: SUM(montant)\n"
+                   "$$")
+
+
+def test_metric_view_ddl_without_comment_and_split_as_one_statement():
+    ddl = build_metric_view_ddl("c", "s", "mv", "version: 0.1\nsource: c.s.t\n", None)
+    assert "COMMENT" not in ddl
+    assert split_sql_statements(ddl + ";\n\nCREATE VIEW `c`.`s`.`v` AS SELECT 1;") == [
+        ddl, "CREATE VIEW `c`.`s`.`v` AS SELECT 1"]
