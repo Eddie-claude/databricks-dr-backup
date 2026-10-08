@@ -147,6 +147,11 @@ def restore_notebooks(backup_path, host, token, target_dir="/Shared/dr-restore",
 
     notebooks_dir = Path(backup_path) / "workspace" / "notebooks"
     if not notebooks_dir.exists():
+        if (Path(backup_path) / "workspace" / "manifest.json").exists():
+            print("  [ERROR] Backup au format v4.2 (workspace/objects + manifest.json) : ce script ne "
+                  "restaure que l'ancien format. Utiliser le notebook 08_restore_workspace "
+                  "(ou 10_restore_orchestrator, scope notebooks).")
+            return 1
         print(f"  [SKIP] Dossier notebooks introuvable : {notebooks_dir}")
         return 0
 

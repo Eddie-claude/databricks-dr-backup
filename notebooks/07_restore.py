@@ -8,8 +8,8 @@
 # MAGIC
 # MAGIC | Niveau | Source | Point de restauration |
 # MAGIC |--------|--------|----------------------|
-# MAGIC | `incremental` | `backup/incremental/` | N'importe quel timestamp dans les 15 derniers jours |
-# MAGIC | `weekly` | `backup/snapshots/weekly/` | Une semaine précise (ex: `2026-W19`) |
+# MAGIC | `incremental` | `backup/incremental/` | N'importe quel timestamp de la rétention quotidienne (retain_daily, 30 jours par défaut) |
+# MAGIC | `weekly` | `backup/snapshots/weekly/` | Anciens snapshots hebdomadaires (plus créés) : une semaine précise (ex: `2026-W19`) |
 # MAGIC | `monthly` | `backup/snapshots/monthly/` | Un mois précis (ex: `2026-05`) |
 # MAGIC
 # MAGIC **Mode dry_run = true** : affiche les commandes sans exécuter — recommandé avant toute restauration.
@@ -78,7 +78,7 @@ weekly_available  = list_dirs(weekly_root,  WEEK_PAT)
 monthly_available = list_dirs(monthly_root, MONTH_PAT)
 
 print("── Snapshots disponibles ─────────────────────────────")
-print(f"  Incremental : point-in-time sur les 15 derniers jours")
+print(f"  Incremental : point-in-time sur la rétention quotidienne (retain_daily, 30 jours par défaut)")
 if weekly_available:
     print(f"  Weekly      : {', '.join(weekly_available)}")
 else:

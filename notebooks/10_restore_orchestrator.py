@@ -43,7 +43,7 @@ def _uc_head(path: str) -> str:
 # COMMAND ----------
 from datetime import date
 
-dbutils.widgets.text(       "backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
+dbutils.widgets.text(       "backup_root",    "",          "Backup root (abfss://...)")
 dbutils.widgets.text(       "backup_date",    "",          "Date du backup (vide = dernier backup)")
 dbutils.widgets.multiselect("restore_scope",  "jobs",      ["tables", "uc_objects", "volume_files", "grants", "jobs", "notebooks", "pipelines", "acls"], "Périmètre de restauration")
 dbutils.widgets.dropdown(   "dry_run",        "true",      ["true", "false"], "Dry-run (true = simulation)")
@@ -53,6 +53,8 @@ dbutils.widgets.dropdown(   "restore_level",  "incremental", ["incremental", "we
 dbutils.widgets.text(       "restore_point",  "",          "Point de restauration (timestamp ou label, vide = dernier)")
 dbutils.widgets.text(       "source_table",   "",          "Table(s) à restaurer (vide = toutes)")
 dbutils.widgets.text(       "target_catalog", "",          "Catalog cible tables (vide = même que source)")
+dbutils.widgets.dropdown(   "include_stale",  "false",     ["false", "true"],
+                            "Tables : inclure celles absentes du backup de référence (données périmées)")
 
 # Paramètres grants + uc_objects (utilisés si scope contient 'grants' ou 'uc_objects')
 dbutils.widgets.text(       "catalog_filter", "",          "Catalogs à restaurer pour les grants / volumes / fonctions (vide = tous)")
@@ -81,6 +83,7 @@ restore_level  = dbutils.widgets.get("restore_level")
 restore_point  = dbutils.widgets.get("restore_point").strip()
 source_table   = dbutils.widgets.get("source_table").strip()
 target_catalog = dbutils.widgets.get("target_catalog").strip()
+include_stale  = dbutils.widgets.get("include_stale")
 
 catalog_filter = dbutils.widgets.get("catalog_filter").strip()
 
@@ -179,6 +182,7 @@ if "tables" in restore_scope:
             "restore_point":  restore_point,
             "target_catalog": target_catalog,
             "target_schema":  "",
+            "include_stale":  include_stale,
             "dry_run":        dry_run,
         },
         critical = False,

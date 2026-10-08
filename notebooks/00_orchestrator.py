@@ -26,7 +26,7 @@ def _uc_put(path: str, content: str) -> None:
     dbutils.fs.rm(tmp, recurse=True)
 
 # COMMAND ----------
-dbutils.widgets.text("backup_root",    "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup", "Backup root (abfss://...)")
+dbutils.widgets.text("backup_root",    "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",    str(date.today()), "Date backup YYYY-MM-DD")
 # lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
 _nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
@@ -39,7 +39,9 @@ dbutils.widgets.text("dry_run",        "false", "Dry-run retention (true = simul
 dbutils.widgets.text("max_parallel",   "8",     "Opérations simultanées (clones dans 02, VACUUM dans 06)")
 dbutils.widgets.text("vacuum_dow",     "7",     "Jour du VACUUM : 1=lundi … 7=dimanche, 0=tous les jours")
 
-backup_root    = dbutils.widgets.get("backup_root")
+backup_root    = dbutils.widgets.get("backup_root").strip().rstrip("/")
+if not backup_root.startswith("abfss://"):
+    raise ValueError("backup_root vide ou invalide — renseigner la racine du backup (abfss://...)")
 # Vide = aujourd'hui. Renseigner explicitement la date d'un run interrompu permet de
 # retrouver son checkpoint (_checkpoints/{backup_date}.json, indexé par date) et donc de
 # reprendre exactement où il s'est arrêté, y compris un jour plus tard.
