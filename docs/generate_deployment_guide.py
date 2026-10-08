@@ -638,7 +638,7 @@ add_code(
     "notebooks/                pipeline de backup et de restauration\n"
     "lib/                      modules partages (DDL volumes/fonctions, diff, rapport, templates)\n"
     "scripts/                  utilitaires de restauration hors Databricks\n"
-    "docs/                     guides de deploiement et de restauration",
+    "docs/                     guide de deploiement, runbook de restauration, notes de version",
 )
 
 add_warning(
@@ -1286,8 +1286,10 @@ doc.add_page_break()
 add_heading(doc, "9. Restauration", 1)
 
 doc.add_paragraph(
-    "La procédure détaillée figure dans le document DR Backup — Guide de restauration, livré "
-    "avec cette solution. Ce chapitre en donne la vue d'ensemble."
+    "La procédure détaillée figure dans le document DR Backup — Runbook de restauration "
+    "(DR_Backup_Runbook_Restauration_v4.2.docx), livré avec cette solution : paramètres de chaque "
+    "notebook, scénarios de restauration partielle et totale, comportement quand un objet existe "
+    "déjà. Ce chapitre en donne la vue d'ensemble."
 )
 
 add_table(

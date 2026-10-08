@@ -58,6 +58,19 @@ add_note(
     "aucune perte de fenêtre de restauration.",
 )
 
+add_table(
+    doc,
+    ["Document livré", "Contenu"],
+    [
+        ["Notes de version v4.2 (ce document)", "Changements, procédure de mise à jour, vérifications"],
+        ["Guide de déploiement v4.2", "Installation, prérequis, contrôles (diag_03, diag_04), "
+                                      "synchronisation des droits, plan de reconstruction"],
+        ["Runbook de restauration v4.2", "Procédure de restauration détaillée, paramètres des notebooks, "
+                                         "comportement quand un objet existe déjà"],
+    ],
+    col_widths=[5.5, 10.5],
+)
+
 add_heading(doc, "1.1 Ce que vous allez constater", 2)
 
 add_table(

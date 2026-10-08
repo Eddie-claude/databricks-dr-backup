@@ -1,8 +1,18 @@
 # Runbook — Restauration Complète Databricks DR
 
-**Version :** 2.0  
-**Date :** 2026-06-25  
-**Contexte :** Groupe Mutuelle — Workspace Azure Databricks (Switzerland North)
+**Version :** 4.2
+
+Les valeurs entre chevrons sont à remplacer par celles de l'environnement : `<compte>` (compte de stockage du backup), `<container>`, `<workspace>` (URL du workspace Databricks).
+
+---
+
+## Documents de référence
+
+| Document | Contenu |
+|----------|---------|
+| Guide de déploiement v4.2 | Installation, prérequis et droits (§2), rapport de couverture `diag_03` et sa lecture (§3.4), contrôle des tables protégées `diag_04` (§3.5), synchronisation automatique des droits `dr-backup-grants-sync` (§8), vue d'ensemble de la restauration (§9), plan de reconstruction des tables non sauvegardées (§9.3) |
+| Notes de version v4.2 | Ce qui change par rapport à la version précédente, procédure de mise à jour et vérifications |
+| Ce runbook | Procédure de restauration détaillée, paramètres des notebooks de restauration, comportement quand un objet existe déjà |
 
 ---
 
@@ -81,7 +91,7 @@ Le backup reconstitue l'état réel du metastore, y compris des objets que l'IaC
 - [ ] Python 3.9+ + `pip install requests`
 - [ ] AzCopy installé (pour télécharger le backup depuis ADLS — scripts CLI uniquement)
 - [ ] PAT Token valide sur le workspace cible
-- [ ] Accès en lecture sur `st10keyitdpdrpdevchn00` (container `uc-data`)
+- [ ] Accès en lecture sur `<compte>` (container `<container>`)
 
 ---
 
@@ -89,11 +99,11 @@ Le backup reconstitue l'état réel du metastore, y compris des objets que l'IaC
 
 ```bash
 # Lister les backups disponibles
-azcopy list "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/backup" \
+azcopy list "https://<compte>.dfs.core.windows.net/<container>/backup" \
     --recursive=false
 
 # Vérifier le dernier backup validé
-azcopy cat "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/backup/latest.json"
+azcopy cat "https://<compte>.dfs.core.windows.net/<container>/backup/latest.json"
 ```
 
 Retient la date `BACKUP_DATE` (ex: `2026-06-25`).
@@ -115,7 +125,7 @@ backup/
     ├── incremental/              # DEEP CLONE journalier des tables (Delta)
     │   └── {catalog}/{schema}/{table}/
     ├── snapshots/
-    │   ├── weekly/{YYYY-Www}/    # Snapshot hebdomadaire
+    │   ├── weekly/{YYYY-Www}/    # Anciens snapshots hebdomadaires (plus créés ; purgés par la rétention)
     │   └── monthly/{YYYY-MM}/   # Snapshot mensuel
     ├── jobs/
     │   ├── jobs_all.json         # Toutes les définitions de jobs
@@ -139,7 +149,7 @@ Ouvrir `10_restore_orchestrator` dans le workspace et sélectionner `tables` dan
 
 | Paramètre | Valeur |
 |-----------|--------|
-| `backup_root` | `abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup` |
+| `backup_root` | `abfss://<container>@<compte>.dfs.core.windows.net/backup` |
 | `backup_date` | vide = auto-détection, ou `2026-06-25` |
 | `restore_scope` | `tables` |
 | `restore_level` | `incremental` / `weekly` / `monthly` |
@@ -148,12 +158,12 @@ Ouvrir `10_restore_orchestrator` dans le workspace et sélectionner `tables` dan
 #### Option 2 : Script CLI
 
 ```bash
-export DATABRICKS_HOST=https://adb-2547670924000766.6.azuredatabricks.net
+export DATABRICKS_HOST=https://<workspace>.azuredatabricks.net
 export DATABRICKS_TOKEN=dapiXXXX
 
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
+    --backup-root "abfss://<container>@<compte>.dfs.core.windows.net/backup"
 ```
 
 > Les `already exists` sont ignorés automatiquement.
@@ -190,7 +200,7 @@ Sélectionner `grants` dans `restore_scope` du notebook `10_restore_orchestrator
 ```bash
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup" \
+    --backup-root "abfss://<container>@<compte>.dfs.core.windows.net/backup" \
     --only-grants
 ```
 
@@ -208,7 +218,7 @@ Sélectionner `acls` dans `restore_scope` du notebook `10_restore_orchestrator`.
 export LOCAL_BACKUP=/tmp/dr-restore/$BACKUP_DATE
 
 azcopy sync \
-    "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/backup/$BACKUP_DATE" \
+    "https://<compte>.dfs.core.windows.net/<container>/backup/$BACKUP_DATE" \
     "$LOCAL_BACKUP" --recursive
 
 python scripts/restore_workspace_config.py \
@@ -223,7 +233,7 @@ python scripts/restore_workspace_config.py \
 ```bash
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
+    --backup-root "abfss://<container>@<compte>.dfs.core.windows.net/backup"
 ```
 
 Ou depuis le notebook `10_restore_orchestrator` en sélectionnant `grants`.
@@ -262,7 +272,7 @@ databricks configure --host $DATABRICKS_HOST --token $DATABRICKS_TOKEN
 ```bash
 python scripts/restore_uc.py \
     --backup-date $BACKUP_DATE \
-    --backup-root "abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup"
+    --backup-root "abfss://<container>@<compte>.dfs.core.windows.net/backup"
 ```
 
 Ordre d'exécution automatique :
@@ -284,7 +294,7 @@ Sélectionner `tables` dans `restore_scope`, choisir `restore_level` et `restore
 
 | Paramètre | Valeur |
 |-----------|--------|
-| `backup_root` | `abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup` |
+| `backup_root` | `abfss://<container>@<compte>.dfs.core.windows.net/backup` |
 | `restore_level` | `incremental` / `weekly` / `monthly` |
 | `restore_point` | timestamp ou label (ex: `2026-W25`, `2026-06`) |
 | `source_table` | `catalog.schema.*` ou vide = toutes |
@@ -299,7 +309,7 @@ Sélectionner `tables` dans `restore_scope`, choisir `restore_level` et `restore
 ```bash
 export LOCAL_BACKUP=/tmp/dr-restore/$BACKUP_DATE
 azcopy sync \
-    "https://st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/backup/$BACKUP_DATE" \
+    "https://<compte>.dfs.core.windows.net/<container>/backup/$BACKUP_DATE" \
     "$LOCAL_BACKUP" --recursive
 
 # Dry-run
@@ -390,7 +400,7 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 | `backup_date` | Vide = auto-détection via `latest.json` |
 | `restore_scope` | Multiselect : `tables`, `uc_objects`, `volume_files`, `grants`, `jobs`, `notebooks`, `pipelines`, `acls` |
 | `dry_run` | `true` (simulation) / `false` (applique) |
-| `restore_level` | Pour les tables : `incremental` / `weekly` / `monthly` |
+| `restore_level` | Pour les tables : `incremental` (défaut) / `monthly` / `weekly` (anciens snapshots seulement) |
 | `restore_point` | Pour les tables : timestamp ou label (`2026-W25`) |
 | `source_table` | Pour les tables : `cat.schema.table` ou vide = toutes |
 | `catalog_filter` | Pour les grants UC : noms des catalogs séparés par virgule, vide = tous |
@@ -398,12 +408,11 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 | `notebook_filter` | Pour les notebooks et leurs permissions : chemin préfixe (`/Shared/projet`), vide = tout le workspace |
 | `pipeline_filter` | Pour les pipelines : sous-chaîne du nom, vide = tous |
 | `volume_filter` | Pour les fichiers de volumes : `catalog.schema.volume`, jokers `*` acceptés |
+| `conflict_mode` | Pour les jobs et pipelines existants : `skip` (défaut, inchangés) / `replace` (définition remplacée en place) |
 
 > ⚠️ Laissés vides, ces filtres couvrent **tout** le backup (notebooks et permissions de tous les utilisateurs, tous les pipelines, tous les volumes). Pour une restauration partielle, toujours les renseigner.
 
 > `07_restore` ne restaure que les tables sauvegardées avec succès à la date de référence (dernier backup, ou dernier au plus tard au `restore_point`). Les tables présentes dans `incremental/` mais absentes de ce backup sont listées comme périmées ; `include_stale = true` (widget de `07_restore`) les restaure quand même.
-| `conflict_mode` | Pour les jobs : `skip` (défaut) / `recreate` |
-
 **Si l'objet existe déjà dans l'environnement cible :**
 
 | Objet | Notebook | Comportement |
@@ -421,7 +430,7 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 > ⚠️ `conflict_mode` (jobs, pipelines) : `skip` (défaut) ou `replace` ; `recreate` est l'ancien nom de `replace`.
 
 **Procédure :**
-1. Importer le notebook dans le workspace
+1. Ouvrir `10_restore_orchestrator` dans le dossier du bundle (`…/.bundle/dr-backup/<cible>/files/notebooks`) : il y trouve `lib/`
 2. Renseigner `backup_root` et sélectionner le périmètre
 3. Lancer avec `dry_run = true` — vérifier le plan
 4. Relancer avec `dry_run = false`
@@ -490,7 +499,10 @@ Fiche à tenir au plan de reprise pour chacune : table · raison (filtre / masqu
 
 ## 6. Contacts et ressources
 
-- Backup ADLS : `st10keyitdpdrpdevchn00.dfs.core.windows.net/uc-data/backup/`
-- Workspace Databricks : `https://adb-2547670924000766.6.azuredatabricks.net`
-- Repo GitHub : `https://github.com/Eddie-claude/databricks-dr-backup`
-- Subscription Azure : `sub-keyIT-prd-dataplatform-01`
+À compléter pour l'environnement :
+
+- Backup ADLS : `<compte>.dfs.core.windows.net/<container>/backup/`
+- Workspace Databricks : `https://<workspace>.azuredatabricks.net`
+- Souscription Azure : `<souscription>`
+- Responsable de la restauration et équipe plateforme : `<noms et contacts>`
+- Responsables des tables non sauvegardées : voir les fiches du plan de reprise
