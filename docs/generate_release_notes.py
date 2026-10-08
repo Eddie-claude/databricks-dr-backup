@@ -276,7 +276,9 @@ bullet(doc, "Le rapport détaille les tables découvertes, sauvegardées, non cl
             "et liste les tables non sauvegardées avec leur cause.")
 bullet(doc, "Une table en erreur de clone fait passer le statut global du run à « degraded ».")
 bullet(doc, "Si le type des tables d'un schéma ne peut pas être lu dans information_schema, il est "
-            "lu via l'API Unity Catalog : les vues ne sont plus envoyées au clone.")
+            "lu via l'API Unity Catalog : les vues ne sont plus envoyées au clone. Cause constatée : "
+            "le compte du job n'avait pas USE CATALOG sur le catalog system, prérequis désormais "
+            "documenté et vérifié par dr-backup-grants-sync.")
 
 add_note(
     doc,

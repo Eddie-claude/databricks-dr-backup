@@ -52,6 +52,11 @@ def grant_statement(securable: str, name: str, privileges: list, principal: str)
     """GRANT SQL (noms de privilèges avec espaces, comme le veut la syntaxe)."""
     privs = ", ".join(p.replace("_", " ") for p in privileges)
     return f"GRANT {privs} ON {securable} `{name}` TO `{principal}`"
+
+
+# Les vues information_schema de chaque catalog s'appuient sur le catalog system : sans ce droit,
+# 01_uc_metadata ne lit plus le type des tables (INSUFFICIENT_PERMISSIONS).
+SYSTEM_CATALOG_PRIVILEGES = {"USE_CATALOG"}
 # <<< REGLES
 
 principal  = dbutils.widgets.get("backup_principal").strip()
@@ -111,6 +116,12 @@ if location:
     if missing:
         statements.append(grant_statement("EXTERNAL LOCATION", location, missing, principal))
     rows.append((f"[external location] {location}", "OK" if not missing else "manquant", ", ".join(missing)))
+
+# Catalog system (exclu de la boucle, comme tous les catalogs système) : USE CATALOG seulement
+missing = missing_privileges(SYSTEM_CATALOG_PRIVILEGES, current.get("system", set()))
+if missing:
+    statements.append(grant_statement("CATALOG", "system", missing, principal))
+rows.append(("[catalog] system (information_schema)", "OK" if not missing else "manquant", ", ".join(missing)))
 
 display(spark.createDataFrame(rows, "objet STRING, statut STRING, droits_manquants STRING"))
 n_missing = sum(1 for r in rows if r[1] == "manquant")

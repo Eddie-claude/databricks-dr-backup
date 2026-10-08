@@ -277,7 +277,8 @@ add_table(
     [
         ["External Location de backup", "CREATE EXTERNAL TABLE, READ FILES, WRITE FILES", "Écrire les clones Delta"],
         ["Catalogs à sauvegarder", "USE CATALOG, USE SCHEMA, SELECT", "Lire les tables sources"],
-        ["Metastore", "Aucun droit particulier", "La lecture d'information_schema suffit"],
+        ["Catalog system", "USE CATALOG",
+         "Lire information_schema, sur lequel s'appuie le tri tables / vues"],
     ],
     col_widths=[5, 6.5, 5],
 )
@@ -287,7 +288,15 @@ add_code(
     "GRANT CREATE EXTERNAL TABLE, READ FILES, WRITE FILES\n"
     "  ON EXTERNAL LOCATION `drbackup-location` TO `<application-id-du-sp>`;\n\n"
     "GRANT USE CATALOG, USE SCHEMA, SELECT\n"
-    "  ON CATALOG `<catalog-a-sauvegarder>` TO `<application-id-du-sp>`;",
+    "  ON CATALOG `<catalog-a-sauvegarder>` TO `<application-id-du-sp>`;\n\n"
+    "GRANT USE CATALOG ON CATALOG `system` TO `<application-id-du-sp>`;",
+)
+
+add_note(
+    doc,
+    "sans USE CATALOG sur system, chaque lecture d'information_schema échoue "
+    "(INSUFFICIENT_PERMISSIONS). Le backup lit alors le type des tables via l'API Unity Catalog, "
+    "plus lentement : un appel par schéma. Le job dr-backup-grants-sync vérifie ce droit.",
 )
 
 add_note(

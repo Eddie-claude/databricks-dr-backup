@@ -26,3 +26,11 @@ def test_grant_statement_uses_sql_privilege_names():
 
 def test_parse_privileges_normalizes():
     assert R["parse_privileges"]("use catalog, USE_SCHEMA ,select") == {"USE_CATALOG", "USE_SCHEMA", "SELECT"}
+
+
+def test_system_catalog_use_is_required():
+    # Sans USE CATALOG sur system, information_schema de chaque catalog est illisible : 01 ne
+    # connaissait plus le type des tables et envoyait les vues au clone (4 295 chez le client).
+    assert R["SYSTEM_CATALOG_PRIVILEGES"] == {"USE_CATALOG"}
+    assert R["grant_statement"]("CATALOG", "system", ["USE_CATALOG"], "sp-backup") == \
+        "GRANT USE CATALOG ON CATALOG `system` TO `sp-backup`"
