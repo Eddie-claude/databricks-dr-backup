@@ -341,6 +341,26 @@ doc.add_paragraph(
     "03_tables.sql. Vérifié par une recréation depuis le backup : même type, mêmes résultats."
 )
 
+add_heading(doc, "2.18 Option « recreate » des jobs et des pipelines", 2)
+
+bullet(doc, "Jobs : recreate laissait le job existant en place et en créait un second du même nom ; "
+            "planifiés, les deux s'exécutaient. replace remplace désormais la définition du job existant "
+            "(même job, même historique d'exécutions).")
+bullet(doc, "Pipelines : recreate supprimait le pipeline existant avant de le recréer — et avec lui les "
+            "tables qu'il gère (vues matérialisées, streaming tables). replace met désormais à jour sa "
+            "définition en place, sans rien supprimer.")
+doc.add_paragraph("Le paramètre conflict_mode vaut skip (défaut) ou replace ; recreate reste accepté comme "
+                  "ancien nom de replace.")
+
+add_heading(doc, "2.19 Volumes et fonctions modifiés depuis le backup", 2)
+
+doc.add_paragraph(
+    "12_restore_uc_objects ne recrée que les objets absents (IF NOT EXISTS). Un volume ou une fonction "
+    "modifié depuis le backup restait tel quel sans signal ; il est désormais comparé au backup et signalé "
+    "« DIFFÉRENT », en simulation comme en exécution. Il n'est pas modifié : à corriger manuellement si la "
+    "version du backup doit prévaloir."
+)
+
 doc.add_page_break()
 
 

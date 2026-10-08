@@ -22,8 +22,10 @@ Validé par un test aller-retour complet (backup → sinistre → restauration) 
 | 2.11 | **Vues recréées hors de leur catalogue**, et **catalogues non recréables** sur un metastore sans stockage racine (DDL sans emplacement). |
 | 2.15 | **`07` restaurait des tables périmées** (présentes dans le stockage mais absentes du backup du jour) : sélection d'après le manifest de la date de référence, `include_stale` pour les inclure. |
 | 2.16 | **L'orchestrateur de restauration reprenait tout** (workspace de tous les utilisateurs, tous les pipelines, tous les volumes) : `notebook_filter`, `pipeline_filter`, `volume_filter`. |
-| 2.6 | Le corps des fonctions Python gagnait des lignes vides à chaque cycle backup → restauration. |
 | 2.17 | **Metric views absentes du backup** : `SHOW CREATE TABLE` les refuse sur le runtime des jobs. Définition reconstruite depuis leur YAML (`CREATE VIEW … WITH METRICS`). |
+| 2.18 | **« recreate » doublait les jobs** (second job du même nom, deux exécutions planifiées) **et supprimait les pipelines** avec leurs tables : `replace` remplace en place (`jobs/reset`, `PUT /pipelines`). |
+| 2.19 | **Volumes / fonctions modifiés depuis le backup laissés en place sans signal** : comparés au backup, signalés « DIFFÉRENT ». |
+| 2.6 | Le corps des fonctions Python gagnait des lignes vides à chaque cycle backup → restauration. |
 
 ## Fiabilité du job de backup
 

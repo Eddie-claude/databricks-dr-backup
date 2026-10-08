@@ -392,6 +392,22 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 > `07_restore` ne restaure que les tables sauvegardées avec succès à la date de référence (dernier backup, ou dernier au plus tard au `restore_point`). Les tables présentes dans `incremental/` mais absentes de ce backup sont listées comme périmées ; `include_stale = true` (widget de `07_restore`) les restaure quand même.
 | `conflict_mode` | Pour les jobs : `skip` (défaut) / `recreate` |
 
+**Si l'objet existe déjà dans l'environnement cible :**
+
+| Objet | Notebook | Comportement |
+|-------|----------|--------------|
+| Tables Delta | `07_restore` | Écrasée (CREATE OR REPLACE … DEEP CLONE). L'historique Delta est conservé : RESTORE TABLE … VERSION AS OF revient à l'état d'avant la restauration. |
+| Catalogues, schémas, tables, vues (DDL) | `restore_uc.py` | Inchangés (IF NOT EXISTS ou « already exists » ignoré). |
+| Volumes, fonctions | `12_restore_uc_objects` | Inchangés ; signalés « DIFFÉRENT » si leur définition diffère du backup. |
+| Fichiers des volumes | `15_restore_volume_files` | Écrasés ; les fichiers absents du backup sont conservés et listés. |
+| Permissions Unity Catalog | `11_restore_grants` | Ajoutées ; les permissions accordées depuis le backup ne sont pas retirées. |
+| Notebooks, fichiers, tableaux de bord | `08_restore_workspace` | Écrasés. |
+| Permissions du workspace | `08_restore_workspace` | Remplacées : les permissions directes accordées depuis le backup sont retirées. |
+| Jobs | `09_restore_jobs` | skip (défaut) : inchangé. replace : définition remplacée en place, même job et même historique ; permissions du backup ajoutées. |
+| Pipelines | `13_restore_pipelines` | skip (défaut) : inchangé. replace : définition mise à jour en place, même pipeline et mêmes tables ; permissions du backup ajoutées. |
+
+> ⚠️ `conflict_mode` (jobs, pipelines) : `skip` (défaut) ou `replace` ; `recreate` est l'ancien nom de `replace`.
+
 **Procédure :**
 1. Importer le notebook dans le workspace
 2. Renseigner `backup_root` et sélectionner le périmètre

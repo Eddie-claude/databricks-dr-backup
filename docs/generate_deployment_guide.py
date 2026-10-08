@@ -1204,6 +1204,32 @@ doc.add_paragraph(
     "include_stale = true les restaure quand même, dans l'état de leur dernier backup réussi."
 )
 
+doc.add_paragraph("Comportement quand l'objet existe déjà dans l'environnement cible :")
+
+add_table(
+    doc,
+    ["Objet", "Notebook", "Si l'objet existe déjà"],
+    [
+        ['Tables Delta', '07_restore', "Écrasée (CREATE OR REPLACE … DEEP CLONE). L'historique Delta est conservé : RESTORE TABLE … VERSION AS OF revient à l'état d'avant la restauration."],
+        ['Catalogues, schémas, tables, vues (DDL)', 'restore_uc.py', 'Inchangés (IF NOT EXISTS ou « already exists » ignoré).'],
+        ['Volumes, fonctions', '12_restore_uc_objects', 'Inchangés ; signalés « DIFFÉRENT » si leur définition diffère du backup.'],
+        ['Fichiers des volumes', '15_restore_volume_files', 'Écrasés ; les fichiers absents du backup sont conservés et listés.'],
+        ['Permissions Unity Catalog', '11_restore_grants', 'Ajoutées ; les permissions accordées depuis le backup ne sont pas retirées.'],
+        ['Notebooks, fichiers, tableaux de bord', '08_restore_workspace', 'Écrasés.'],
+        ['Permissions du workspace', '08_restore_workspace', 'Remplacées : les permissions directes accordées depuis le backup sont retirées.'],
+        ['Jobs', '09_restore_jobs', 'skip (défaut) : inchangé. replace : définition remplacée en place, même job et même historique ; permissions du backup ajoutées.'],
+        ['Pipelines', '13_restore_pipelines', 'skip (défaut) : inchangé. replace : définition mise à jour en place, même pipeline et mêmes tables ; permissions du backup ajoutées.'],
+    ],
+    col_widths=[4, 4, 8],
+)
+
+add_warning(
+    doc,
+    "une restauration des tables écrase les données actuelles par celles du backup. Sur un "
+    "environnement encore en service, restaurer d'abord vers un catalogue de contrôle "
+    "(target_catalog) pour comparer, puis à l'emplacement d'origine.",
+)
+
 add_heading(doc, "9.1 Restauration ponctuelle sans notebook", 2)
 
 doc.add_paragraph("Pour une table isolée, la restauration peut se faire directement en SQL :")
