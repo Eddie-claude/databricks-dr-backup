@@ -286,3 +286,23 @@ def test_metric_view_ddl_without_comment_and_split_as_one_statement():
     assert "COMMENT" not in ddl
     assert split_sql_statements(ddl + ";\n\nCREATE VIEW `c`.`s`.`v` AS SELECT 1;") == [
         ddl, "CREATE VIEW `c`.`s`.`v` AS SELECT 1"]
+
+
+# ── Objet déjà présent à la restauration (12_restore_uc_objects) ─────────
+
+from lib.uc_ddl import ddl_state
+
+_BACKUP = "CREATE VOLUME IF NOT EXISTS `c`.`s`.`docs`\n  COMMENT 'Documents'"
+
+
+def test_absent_object_is_to_create():
+    assert ddl_state(_BACKUP, None) == "absent"
+
+
+def test_same_definition_modulo_spacing_is_identical():
+    assert ddl_state(_BACKUP + ";", "CREATE VOLUME IF NOT EXISTS `c`.`s`.`docs`  COMMENT 'Documents'") == "identical"
+
+
+def test_changed_definition_is_reported_as_different():
+    # IF NOT EXISTS laisse l'objet existant tel quel : la différence avec le backup doit se voir
+    assert ddl_state(_BACKUP, "CREATE VOLUME IF NOT EXISTS `c`.`s`.`docs`\n  COMMENT 'Modifié'") == "different"

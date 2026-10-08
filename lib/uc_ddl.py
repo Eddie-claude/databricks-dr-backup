@@ -59,6 +59,16 @@ def build_metric_view_ddl(catalog: str, schema: str, name: str, yaml_text: str,
     return "\n".join(lines)
 
 
+def ddl_state(backup_stmt: str, current_stmt: Optional[str]) -> str:
+    """'absent' (objet à créer), 'identical' ou 'different' (définition actuelle ≠ backup).
+    Les restaurations utilisent IF NOT EXISTS : un objet existant reste tel quel, même s'il diffère
+    du backup — cet état permet au moins de le signaler. Comparaison aux espaces près."""
+    if current_stmt is None:
+        return "absent"
+    norm = lambda s: " ".join(s.strip().rstrip(";").split())  # noqa: E731
+    return "identical" if norm(backup_stmt) == norm(current_stmt) else "different"
+
+
 def qualify_create_name(ddl: str, catalog: str, schema: str, name: str) -> str:
     """Remplace le nom de l'objet créé par catalog.schema.nom : SHOW CREATE TABLE renvoie les vues
     sous la forme « schema.vue », que la restauration créait dans le catalogue courant."""
