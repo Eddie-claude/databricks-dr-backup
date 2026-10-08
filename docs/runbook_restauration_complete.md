@@ -87,8 +87,8 @@ Le backup reconstitue l'état réel du metastore, y compris des objets que l'IaC
 ## Prérequis
 
 - [ ] Accès Azure Portal (Owner sur le resource group)
-- [ ] Databricks CLI installé (`pip install databricks-cli`)
-- [ ] Python 3.9+ + `pip install requests`
+- [ ] CLI Databricks 0.2xx ou supérieure (guide de déploiement §2.7 — l'ancienne `databricks-cli` ne gère pas les bundles)
+- [ ] Python 3.10+ et `pip install -r requirements.txt` (scripts CLI)
 - [ ] AzCopy installé (pour télécharger le backup depuis ADLS — scripts CLI uniquement)
 - [ ] PAT Token valide sur le workspace cible
 - [ ] Accès en lecture sur `<compte>` (container `<container>`)
@@ -114,34 +114,36 @@ Retient la date `BACKUP_DATE` (ex: `2026-06-25`).
 
 ```
 backup/
-└── {BACKUP_DATE}/
-    ├── uc_metadata/              # DDL SQL : catalogs, schemas, tables, volumes, fonctions, grants
-    │   ├── 01_catalogs.sql
-    │   ├── 02_schemas.sql
-    │   ├── 03_tables.sql
-    │   ├── 04_grants.sql
-    │   ├── 05_volumes.sql
-    │   └── 06_functions.sql
-    ├── incremental/              # DEEP CLONE journalier des tables (Delta)
-    │   └── {catalog}/{schema}/{table}/
-    ├── snapshots/
-    │   ├── weekly/{YYYY-Www}/    # Anciens snapshots hebdomadaires (plus créés ; purgés par la rétention)
-    │   └── monthly/{YYYY-MM}/   # Snapshot mensuel
-    ├── jobs/
-    │   ├── jobs_all.json         # Toutes les définitions de jobs
-    │   └── {id}_{name}.json      # Un fichier par job
-    ├── notebooks/                # Sources notebooks (.py / .sql / .scala)
-    │   └── {chemin_workspace}/
-    └── workspace_config/
-        ├── workspace_acls.json   # ACLs notebooks et dossiers workspace
-        └── repos_acls.json       # ACLs repos Git
+├── latest.json                          # Date et statut du dernier backup
+├── {BACKUP_DATE}/                       # Un dossier par jour de backup
+│   ├── manifest.json
+│   ├── uc_metadata/                     # DDL : 01_catalogs, 02_schemas, 03_tables (vues comprises),
+│   │                                    #       04_grants, 05_volumes, 06_functions (.sql)
+│   ├── jobs/                            # jobs_all.json, {id}_{nom}.json, jobs_permissions.json
+│   ├── pipelines/pipelines_all.json     # Définitions et permissions des pipelines
+│   ├── workspace/                       # manifest.json + objects/ (notebooks, fichiers, dashboards)
+│   ├── workspace_config/                # workspace_acls.json, repos_acls.json
+│   ├── diff/                            # Différences avec la veille
+│   └── report/                          # Rapport HTML du backup
+├── incremental/                         # Copie Delta de chaque table (point-in-time sur la rétention)
+│   ├── {catalog}/{schema}/{table}/
+│   ├── _manifests/{date}.json           # Résultat de chaque table, chaque jour
+│   ├── _checkpoints/{date}.json         # Reprise après interruption
+│   ├── _last_versions.json
+│   └── _reclone_archive/{date}/         # Anciennes copies remplacées (à purger à la main)
+├── volumes/
+│   ├── files/{catalog}/{schema}/{volume}/{date}/   # Fichiers des volumes managés
+│   └── _index/                          # État de chaque volume, jour par jour (Delta)
+└── snapshots/
+    ├── monthly/{YYYY-MM}/               # Snapshot mensuel
+    └── weekly/{YYYY-Www}/               # Anciens snapshots hebdomadaires (plus créés)
 ```
 
 ---
 
 ## SCÉNARIO A — Restauration Partielle (workspace intact)
 
-### A.1 — Restaurer la structure UC et les données
+### A.1 — Restaurer les tables
 
 #### Option 1 : Notebook (recommandé)
 
@@ -150,12 +152,16 @@ Ouvrir `10_restore_orchestrator` dans le workspace et sélectionner `tables` dan
 | Paramètre | Valeur |
 |-----------|--------|
 | `backup_root` | `abfss://<container>@<compte>.dfs.core.windows.net/backup` |
-| `backup_date` | vide = auto-détection, ou `2026-06-25` |
 | `restore_scope` | `tables` |
-| `restore_level` | `incremental` / `weekly` / `monthly` |
+| `restore_point` | vide = dernier backup ; date `AAAA-MM-JJ` ou horodatage pour un état antérieur (`backup_date` ne s'applique pas aux tables) |
+| `source_table` | `catalog.schema.table`, `catalog.schema.*`, `catalog.*.*` ou vide = toutes |
+| `target_catalog` | vide = même catalog ; un autre catalog pour restaurer à côté et comparer |
+| `restore_level` | `incremental` (défaut) / `monthly` / `weekly` (anciens snapshots seulement) |
 | `dry_run` | `true` d'abord, puis `false` |
 
-#### Option 2 : Script CLI
+#### Option 2 : Script CLI — structure seulement
+
+`restore_uc.py` ne rejoue que les DDL : les tables sont recréées **vides**. Les données se restaurent par l'option 1.
 
 ```bash
 export DATABRICKS_HOST=https://<workspace>.azuredatabricks.net
@@ -228,46 +234,33 @@ python scripts/restore_workspace_config.py \
     --restore-acls
 ```
 
-### B.3.bis — Restaurer les grants Unity Catalog
-
-```bash
-python scripts/restore_uc.py \
-    --backup-date $BACKUP_DATE \
-    --backup-root "abfss://<container>@<compte>.dfs.core.windows.net/backup"
-```
-
-Ou depuis le notebook `10_restore_orchestrator` en sélectionnant `grants`.
-
 ---
 
 ## SCÉNARIO B — Restauration Totale (nouveau workspace)
 
-### B.1 — Recréer l'infrastructure Azure (Terraform)
+### B.1 — Recréer l'infrastructure (IaC)
 
-> ⚠️ Cette étape est hors scope du backup applicatif.
+> ⚠️ Cette étape est hors du périmètre du backup : elle relève de votre infrastructure as code (Terraform ou équivalent).
 
-```bash
-cd terraform/
-terraform init
-terraform apply -var-file=terraform.tfvars
-```
+Ressources à recréer : workspace Databricks, réseau, compte de stockage, storage credentials, external locations, metastore Unity Catalog (si détruit), catalogs et objets gérés en code. Voir l'ordre de restauration avec l'IaC en tête de ce document.
 
-Ressources recréées :
-- Workspace Databricks (Premium)
-- VNET + Private Endpoints
-- ADLS Gen2 + Storage Credentials + External Locations
-- Unity Catalog Metastore (si détruit)
-
-### B.2 — Configurer le CLI sur le nouveau workspace
+### B.2 — Configurer la CLI sur le nouveau workspace
 
 ```bash
-export DATABRICKS_HOST=https://<nouveau-workspace>.azuredatabricks.net
-export DATABRICKS_TOKEN=<nouveau-PAT>
-
-databricks configure --host $DATABRICKS_HOST --token $DATABRICKS_TOKEN
+databricks configure --host https://<nouveau-workspace>.azuredatabricks.net --profile dr
 ```
 
-### B.3 — Restaurer la structure Unity Catalog
+### B.3 — Déployer la solution (bundle)
+
+À faire **avant** les restaurations : le bundle dépose les notebooks de restauration et `lib/`, et recrée les jobs `dr-backup-*`. Restaurés ensuite avec `conflict_mode = skip`, ces jobs ne sont pas dupliqués.
+
+Dans `databricks.yml`, cible utilisée : mettre à jour `workspace.host` (nouveau workspace) et `variables.backup_root` (racine du backup à restaurer). Puis :
+
+```bash
+databricks bundle deploy --target prod --profile dr
+```
+
+### B.4 — Restaurer la structure Unity Catalog
 
 ```bash
 python scripts/restore_uc.py \
@@ -278,113 +271,21 @@ python scripts/restore_uc.py \
 Ordre d'exécution automatique :
 1. `01_catalogs.sql` — recrée les catalogs *(critique)*
 2. `02_schemas.sql` — recrée les schemas *(critique)*
-3. `03_tables.sql` — recrée les tables (DDL)
-4. `05_volumes.sql` — recrée les volumes (contenu des volumes managés : `15_restore_volume_files`)
+3. `03_tables.sql` — recrée les tables (DDL, vides) et les vues
+4. `05_volumes.sql` — recrée les volumes
 5. `06_functions.sql` — recrée les fonctions
 6. Nouvelle tentative des vues / fonctions en échec (une vue peut appeler une fonction créée après elle)
 7. `04_grants.sql` — restaure les permissions (en dernier : elles visent aussi volumes et fonctions)
 
-### B.4 — Restaurer les données Delta
+### B.5 — Restaurer les données
 
-**Option 1 : Notebook `10_restore_orchestrator`**
+Depuis `10_restore_orchestrator` (dossier du bundle), dans cet ordre de périmètres : `tables` (données Delta), `volume_files` (fichiers des volumes managés), `notebooks`, `jobs` (`conflict_mode = skip`), `pipelines`, `acls`. L'orchestrateur les enchaîne dans le bon ordre si plusieurs périmètres sont sélectionnés (voir §3).
 
-Sélectionner `tables` dans `restore_scope`, choisir `restore_level` et `restore_point`.
+> ℹ️ La date des tables et des fichiers de volumes se fixe par `restore_point` (vide = dernier backup). `backup_date` sert aux autres périmètres.
 
-**Option 2 : Notebook `07_restore` directement**
+> ℹ️ Le `job_id` change à la restauration : `09_restore_jobs` affiche le mapping `ancien job_id → nouveau job_id` en fin d'exécution.
 
-| Paramètre | Valeur |
-|-----------|--------|
-| `backup_root` | `abfss://<container>@<compte>.dfs.core.windows.net/backup` |
-| `restore_level` | `incremental` / `weekly` / `monthly` |
-| `restore_point` | timestamp ou label (ex: `2026-W25`, `2026-06`) |
-| `source_table` | `catalog.schema.*` ou vide = toutes |
-| `dry_run` | `true` d'abord |
-
-### B.5 — Restaurer les Notebooks
-
-**Option 1 : Notebook `10_restore_orchestrator`** — sélectionner `notebooks`.
-
-**Option 2 : Script CLI**
-
-```bash
-export LOCAL_BACKUP=/tmp/dr-restore/$BACKUP_DATE
-azcopy sync \
-    "https://<compte>.dfs.core.windows.net/<container>/backup/$BACKUP_DATE" \
-    "$LOCAL_BACKUP" --recursive
-
-# Dry-run
-python scripts/restore_workspace.py \
-    --backup-path $LOCAL_BACKUP \
-    --host $DATABRICKS_HOST \
-    --token $DATABRICKS_TOKEN \
-    --restore-notebooks \
-    --target-dir /Shared/dr-backup \
-    --dry-run
-
-# Appliquer
-python scripts/restore_workspace.py \
-    --backup-path $LOCAL_BACKUP \
-    --host $DATABRICKS_HOST \
-    --token $DATABRICKS_TOKEN \
-    --restore-notebooks \
-    --target-dir /Shared/dr-backup
-```
-
-### B.6 — Restaurer les Jobs
-
-**Option 1 : Notebook `10_restore_orchestrator`** — sélectionner `jobs`.
-
-**Option 2 : Notebook `09_restore_jobs`** pour restaurer des jobs spécifiques avec filtre.
-
-**Option 3 : Script CLI**
-
-```bash
-# Dry-run
-python scripts/restore_workspace.py \
-    --backup-path $LOCAL_BACKUP \
-    --host $DATABRICKS_HOST \
-    --token $DATABRICKS_TOKEN \
-    --restore-jobs \
-    --dry-run
-
-# Appliquer (les jobs DAB sont automatiquement ignorés)
-python scripts/restore_workspace.py \
-    --backup-path $LOCAL_BACKUP \
-    --host $DATABRICKS_HOST \
-    --token $DATABRICKS_TOKEN \
-    --restore-jobs
-```
-
-> ℹ️ Les jobs gérés par Databricks Asset Bundles (tag `bundle`) sont **ignorés** —  
-> ils seront redéployés via `databricks bundle deploy` dans l'étape suivante.
-
-> ℹ️ Le `job_id` sera différent après restauration. Le notebook `09_restore_jobs` affiche  
-> le mapping `ancien job_id → nouveau job_id` en fin d'exécution.
-
-### B.7 — Redéployer les jobs DAB (bundle)
-
-```bash
-export DATABRICKS_HOST=<nouveau-workspace>
-export DATABRICKS_TOKEN=<nouveau-PAT>
-
-databricks bundle deploy --target prod
-```
-
-Ou déclencher le workflow GitHub Actions `DR Backup DAB`.
-
-### B.8 — Restaurer les ACLs workspace et repos Git
-
-**Option 1 : Notebook `10_restore_orchestrator`** — sélectionner `acls`.
-
-**Option 2 : Script CLI**
-
-```bash
-python scripts/restore_workspace_config.py \
-    --backup-path $LOCAL_BACKUP \
-    --host $DATABRICKS_HOST \
-    --token $DATABRICKS_TOKEN \
-    --restore-acls
-```
+> ℹ️ Les tables dont les données ne sont pas sauvegardées (filtre de lignes, masque de colonnes) sont recréées vides : voir §5.
 
 ---
 
@@ -396,14 +297,16 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 
 | Widget | Description |
 |--------|-------------|
-| `backup_root` | Pré-rempli avec le chemin ADLS production |
+| `backup_root` | À renseigner : racine `abfss://…/backup` du backup |
 | `backup_date` | Vide = auto-détection via `latest.json` |
 | `restore_scope` | Multiselect : `tables`, `uc_objects`, `volume_files`, `grants`, `jobs`, `notebooks`, `pipelines`, `acls` |
 | `dry_run` | `true` (simulation) / `false` (applique) |
 | `restore_level` | Pour les tables : `incremental` (défaut) / `monthly` / `weekly` (anciens snapshots seulement) |
-| `restore_point` | Pour les tables : timestamp ou label (`2026-W25`) |
+| `restore_point` | Pour les tables et les fichiers de volumes : vide = dernier backup, date `AAAA-MM-JJ`, horodatage, ou label de snapshot (`2026-06`) |
 | `source_table` | Pour les tables : `cat.schema.table` ou vide = toutes |
-| `catalog_filter` | Pour les grants UC : noms des catalogs séparés par virgule, vide = tous |
+| `target_catalog` | Pour les tables : vide = même catalog ; un autre catalog pour restaurer à côté et comparer |
+| `include_stale` | Pour les tables : `true` inclut celles absentes du backup de référence (données périmées) |
+| `catalog_filter` | Pour les grants, volumes et fonctions : catalogs séparés par virgule, vide = tous |
 | `job_filter` | Pour les jobs : sous-chaîne du nom, vide = tous |
 | `notebook_filter` | Pour les notebooks et leurs permissions : chemin préfixe (`/Shared/projet`), vide = tout le workspace |
 | `pipeline_filter` | Pour les pipelines : sous-chaîne du nom, vide = tous |
@@ -439,23 +342,27 @@ Pour une restauration interactive depuis le workspace Databricks, le notebook `1
 
 ## 4. Vérification post-restauration
 
-### Via notebooks Databricks (démo)
+### Via les résultats des notebooks de restauration
 
-Exécuter dans l'ordre :
-1. `notebooks/demo/03_dr_scenario` — vérifie tables et données
-2. `notebooks/demo/05_workspace_acl` — vérifie grants et ACLs workspace
+Chaque notebook de restauration se termine par un résumé (objets restaurés, ignorés, en erreur ; pour `12_restore_uc_objects`, objets déjà présents identiques ou DIFFÉRENTS ; pour `07_restore`, tables périmées). Un run sans erreur et sans objet « DIFFÉRENT » inattendu est le premier critère.
+
+### Via le rapport de couverture
+
+Relancer `diag_03_backup_coverage` (compte admin, `backup_root` et `backup_principal` renseignés) : les objets restaurés doivent réapparaître, et les seuls objets « à traiter » doivent être ceux déjà connus (tables non sauvegardées, objets as code).
 
 ### Via CLI
 
 ```bash
-# Vérifier les catalogs
-databricks unity-catalog catalogs list
+# Catalogs et tables d'un schéma
+databricks catalogs list
+databricks tables list <catalog> <schema>
 
-# Vérifier les jobs
+# Jobs et pipelines
 databricks jobs list
+databricks pipelines list-pipelines
 
-# Vérifier les notebooks
-databricks workspace ls /Shared
+# Notebooks restaurés
+databricks workspace list /Shared
 ```
 
 ---

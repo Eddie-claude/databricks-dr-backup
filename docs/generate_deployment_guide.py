@@ -161,13 +161,17 @@ add_code(
     "backup/\n"
     "  incremental/                      Tables Delta, mises a jour chaque jour\n"
     "    {catalog}/{schema}/{table}/      (seul le delta est ecrit)\n"
-    "    _manifests/{AAAA-MM-JJ}.json     resultat de chaque run\n"
+    "    _manifests/{AAAA-MM-JJ}.json     resultat de chaque table, chaque run\n"
     "    _checkpoints/{AAAA-MM-JJ}.json   reprise apres interruption\n"
     "    _last_versions.json              versions Delta deja sauvegardees\n"
+    "    _reclone_archive/{AAAA-MM-JJ}/   anciennes copies remplacees (a purger a la main)\n"
+    "  volumes/\n"
+    "    files/{catalog}/{schema}/{volume}/{AAAA-MM-JJ}/   fichiers des volumes manages\n"
+    "    _index/                          etat de chaque volume, jour par jour (Delta)\n"
     "  snapshots/\n"
     "    monthly/{AAAA-MM}/               archive mensuelle independante\n"
-    "  {AAAA-MM-JJ}/                     metadonnees UC, jobs, notebooks, rapport\n"
-    "  latest.json                       pointeur vers le dernier backup reussi",
+    "  {AAAA-MM-JJ}/                     DDL Unity Catalog, jobs, pipelines, workspace, rapport\n"
+    "  latest.json                       pointeur vers le dernier backup",
 )
 
 doc.add_paragraph(
@@ -279,7 +283,8 @@ add_table(
     ["Objet", "Permission", "Pourquoi"],
     [
         ["External Location de backup", "CREATE EXTERNAL TABLE, READ FILES, WRITE FILES", "Écrire les clones Delta"],
-        ["Catalogs à sauvegarder", "USE CATALOG, USE SCHEMA, SELECT", "Lire les tables sources"],
+        ["Catalogs à sauvegarder", "USE CATALOG, USE SCHEMA, BROWSE, SELECT, READ VOLUME, EXECUTE",
+         "Lire tables, volumes (fichiers) et fonctions ; droits vérifiés par dr-backup-grants-sync (§8)"],
         ["Catalog system", "USE CATALOG",
          "Lire information_schema, sur lequel s'appuie le tri tables / vues"],
     ],
@@ -290,7 +295,7 @@ add_code(
     doc,
     "GRANT CREATE EXTERNAL TABLE, READ FILES, WRITE FILES\n"
     "  ON EXTERNAL LOCATION `drbackup-location` TO `<application-id-du-sp>`;\n\n"
-    "GRANT USE CATALOG, USE SCHEMA, SELECT\n"
+    "GRANT USE CATALOG, USE SCHEMA, BROWSE, SELECT, READ VOLUME, EXECUTE\n"
     "  ON CATALOG `<catalog-a-sauvegarder>` TO `<application-id-du-sp>`;\n\n"
     "GRANT USE CATALOG ON CATALOG `system` TO `<application-id-du-sp>`;",
 )
@@ -643,10 +648,11 @@ add_code(
 
 add_warning(
     doc,
-    "le dossier lib/ est indispensable : les notebooks d'export (01, 03, 04, 14) et de "
+    "le dossier lib/ est indispensable : les notebooks d'export (01, 03, 04, 05, 14) et de "
     "restauration (08, 09, 12, 13, 15) en dépendent. Le bundle le déploie à côté des notebooks et "
     "les jobs le trouvent automatiquement : aucun chemin à renseigner. Une extraction partielle de "
-    "l'archive fait échouer le diff, le rapport et la copie des fichiers des volumes, et le backup "
+    "l'archive fait échouer le diff, le rapport, l'export du workspace et la copie des fichiers des "
+    "volumes, et le backup "
     "des définitions de volumes et fonctions est sauté (avertissement dans la sortie de "
     "01_uc_metadata).",
 )
@@ -654,7 +660,7 @@ add_warning(
 add_heading(doc, "4.2 Adapter databricks.yml", 2)
 
 doc.add_paragraph(
-    "Trois valeurs sont à adapter à l'environnement cible. Tout le reste peut rester en "
+    "Les valeurs suivantes sont à adapter à l'environnement cible. Le reste peut rester en "
     "configuration par défaut."
 )
 
@@ -662,9 +668,14 @@ add_table(
     doc,
     ["Variable", "Valeur à renseigner"],
     [
-        ["backup_root", "abfss://<container>@<compte>.dfs.core.windows.net/backup"],
+        ["backup_root (dans chaque cible)", "abfss://<container>@<compte>.dfs.core.windows.net/backup — les cibles "
+                                           "redéfinissent cette variable : la renseigner sous targets.<cible>.variables"],
         ["notification_email", "Adresse destinataire des alertes d'échec"],
         ["workspace.host (par cible)", "URL du workspace Databricks"],
+        ["backup_principal", "Groupe ou service principal du backup (job dr-backup-grants-sync, §8) : "
+                             "obligatoire, le job échoue s'il est vide"],
+        ["backup_location", "Nom de l'External Location du backup (§2.4)"],
+        ["grants_sync_mode", "report (défaut) puis apply une fois le premier constat validé (§8)"],
     ],
     col_widths=[5, 11],
 )
@@ -676,11 +687,17 @@ add_code(
     "    default: \"abfss://uc-backup@stclientdrbackup.dfs.core.windows.net/backup\"\n"
     "  notification_email:\n"
     "    default: \"exploitation@client.ch\"\n\n"
+    "  backup_principal:\n"
+    "    default: \"dr-backup-readers\"\n"
+    "  backup_location:\n"
+    "    default: \"drbackup-location\"\n\n"
     "targets:\n"
     "  prod:\n"
     "    mode: production\n"
     "    workspace:\n"
-    "      host: https://adb-1234567890123456.7.azuredatabricks.net",
+    "      host: https://adb-1234567890123456.7.azuredatabricks.net\n"
+    "    variables:\n"
+    "      backup_root: \"abfss://uc-backup@stclientdrbackup.dfs.core.windows.net/backup\"",
 )
 
 add_heading(doc, "4.3 Configurer l'authentification de la CLI", 2)
@@ -818,7 +835,7 @@ add_code(
     "databricks bundle deploy   --target prod --profile prod",
 )
 
-doc.add_paragraph("Le déploiement crée deux jobs, tous deux en pause :")
+doc.add_paragraph("Le déploiement crée trois jobs, tous en pause :")
 
 add_table(
     doc,
@@ -826,6 +843,7 @@ add_table(
     [
         ["dr-backup-daily", "Sauvegarde quotidienne incrémentale, rétention, VACUUM", "01:00 UTC, en pause"],
         ["dr-backup-monthly", "Archive mensuelle complète par DEEP CLONE", "1er du mois, 02:00 UTC, en pause"],
+        ["dr-backup-grants-sync", "Vérifie / accorde les droits du compte de backup (§8)", "00:30 UTC, en pause"],
     ],
     col_widths=[4.5, 8, 3.5],
 )
@@ -848,7 +866,7 @@ add_heading(doc, "4.6 Archivage des logs de cluster", 2)
 doc.add_paragraph(
     "Les clusters des jobs sont créés à chaque exécution puis détruits : leurs logs "
     "disparaissent avec eux, et la sortie affichée dans l'interface est tronquée au-delà d'un "
-    "certain volume. Pour permettre un diagnostic après coup, les deux jobs archivent "
+    "certain volume. Pour permettre un diagnostic après coup, dr-backup-daily et dr-backup-monthly archivent "
     "automatiquement leurs logs."
 )
 
@@ -980,7 +998,8 @@ add_table(
     doc,
     ["Relance", "Mécanisme", "Effet"],
     [
-        ["Le même jour", "Checkpoint écrit toutes les 5 tables dans incremental/_checkpoints/{date}.json", "Reprise à la table près"],
+        ["Le même jour", "Checkpoint écrit toutes les 50 tables ou toutes les 2 minutes dans "
+                         "incremental/_checkpoints/{date}.json", "Au plus 50 tables recopiées"],
         ["Un jour plus tard", "Versions Delta déjà sauvegardées, enregistrées dans incremental/_last_versions.json", "Les tables déjà traitées sont ignorées"],
     ],
     col_widths=[3, 7.5, 5.5],
@@ -1032,7 +1051,8 @@ add_table(
         ["max_parallel", "8", "Opérations simultanées : clones et VACUUM"],
         ["vacuum_dow", "7", "Jour du VACUUM, 7 = dimanche (voir §6.3)"],
         ["backup_date", "vide", "Vide = date du jour. À renseigner pour reprendre un run interrompu (voir §5.3)"],
-        ["dry_run", "false", "Simulation, aucune écriture ni suppression"],
+        ["dry_run", "false", "Simule la rétention, la purge et la copie des fichiers de volumes ; la "
+                             "copie des tables et l'export s'exécutent normalement"],
     ],
     col_widths=[4, 3.5, 8.5],
 )
@@ -1327,7 +1347,9 @@ doc.add_paragraph(
     "07_restore ne restaure que les tables sauvegardées avec succès à la date de référence : le "
     "dernier backup, ou le dernier au plus tard à la date du point de restauration. Les tables "
     "présentes dans le stockage mais absentes de ce backup sont listées comme périmées ; "
-    "include_stale = true les restaure quand même, dans l'état de leur dernier backup réussi."
+    "include_stale = true (07_restore ou 10_restore_orchestrator) les restaure quand même, dans "
+    "l'état de leur dernier backup réussi. La date d'une restauration de tables se fixe par "
+    "restore_point (AAAA-MM-JJ ou horodatage), et non par backup_date."
 )
 
 doc.add_paragraph("Comportement quand l'objet existe déjà dans l'environnement cible :")
@@ -1464,7 +1486,7 @@ add_table(
         ["", "databricks.yml adapté à l'environnement", "4.2"],
         ["", "Profil CLI configuré et connexion vérifiée", "4.3"],
         ["", "Test de connectivité de bout en bout réussi", "4.4"],
-        ["", "Bundle déployé, deux jobs visibles dans Workflows", "4.5"],
+        ["", "Bundle déployé, trois jobs visibles dans Workflows (daily, monthly, grants-sync)", "4.5"],
         ["", "Cluster dimensionné selon le nombre de tables", "5.1"],
         ["", "Premier backup exécuté manuellement", "5.4"],
         ["", "Les 8 points de validation sont vérifiés", "7"],
@@ -1504,7 +1526,8 @@ doc.add_paragraph("Contournement, si le déblocage réseau n'est pas immédiat :
 
 add_code(
     doc,
-    "databricks workspace import /Workspace/Shared/dr-backup/notebooks/02_data_clone \\\n"
+    "databricks workspace import \\\n"
+    "  /Workspace/Shared/dr-backup/.bundle/dr-backup/prod/files/notebooks/02_data_clone \\\n"
     "  --file notebooks/02_data_clone.py --language PYTHON \\\n"
     "  --format SOURCE --overwrite --profile prod",
 )
@@ -1519,6 +1542,23 @@ add_warning(
     doc,
     "ce contournement pousse le code mais ne crée pas les jobs. Il permet de corriger un "
     "notebook sur un déploiement existant ; il ne remplace pas un bundle deploy initial.",
+)
+
+doc.add_paragraph("Variante : le téléchargement de Terraform lui-même est refusé.")
+
+add_code(doc, "Error: error downloading Terraform: unable to verify checksums signature: openpgp: key expired")
+
+doc.add_paragraph(
+    "La CLI vérifie la signature du binaire Terraform qu'elle télécharge ; une clé de signature "
+    "expirée bloque le téléchargement. Installer Terraform sur le poste (ou réutiliser celui d'un "
+    "déploiement précédent, sous .databricks/bundle/<cible>/bin/) et l'indiquer à la CLI :"
+)
+
+add_code(
+    doc,
+    "export DATABRICKS_TF_EXEC_PATH=/chemin/vers/terraform\n"
+    "export DATABRICKS_TF_VERSION=<version affichée par terraform version>\n"
+    "databricks bundle validate --target <cible>",
 )
 
 add_heading(doc, "A.2 Erreur 403 lors de l'utilisation d'un token personnel", 2)
@@ -1579,7 +1619,7 @@ bullet(doc, "Table dans un format autre que Delta")
 bullet(doc, "Table protégée par un filtre de lignes ou un masque de colonnes : non clonable, "
             "listée comme non clonable dans le rapport")
 bullet(doc, "Catalog auquel le principal du job n'a pas accès en lecture")
-bullet(doc, "Catalog exclu par conception : hive_metastore, system, samples, information_schema")
+bullet(doc, "Catalog exclu par conception (hive_metastore, system, samples) ou schéma information_schema")
 bullet(doc, "Catalog fédéré ou Delta Sharing : exclu par conception, signalé par une ligne [SKIP] dans 01_uc_metadata")
 
 doc.add_paragraph(

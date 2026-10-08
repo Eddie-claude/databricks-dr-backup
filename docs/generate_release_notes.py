@@ -47,7 +47,7 @@ doc.add_paragraph(
 doc.add_paragraph(
     "Un test complet de sauvegarde puis de restauration, objet par objet, a été mené sur "
     "l'environnement de test avant cette livraison. Il a mis au jour plusieurs défauts silencieux, "
-    "corrigés dans cette version (§2.8 à §2.16) ; les plus importants concernent les jobs, "
+    "corrigés dans cette version (§2.8 à §2.19) ; les plus importants concernent les jobs, "
     "sauvegardés sans leurs tâches, et le workspace, dont une partie pouvait manquer au backup."
 )
 
@@ -452,7 +452,7 @@ add_table(
         ["workspace_paths", "/", "Dossiers exportés"],
         ["exclude_paths", "/Repos", "Dossiers exclus ; le contenu des repos Git est dans Git"],
         ["export_pipelines", "true", "Sauvegarde des pipelines"],
-        ["max_parallel", "16", "Appels API simultanés"],
+        ["max_parallel", "4", "Appels API simultanés (au-delà, l'API limite le débit, voir §2.9)"],
     ],
     col_widths=[5, 2.5, 8.5],
 )
@@ -506,7 +506,7 @@ doc.add_page_break()
 
 add_heading(doc, "4. Procédure de mise à jour", 1)
 
-numbered(doc, "Extraire l'archive, en conservant le dossier lib/ : les notebooks d'export (01, 03, 04, 14) et de restauration (08, 09, 12, 13, 15) en dépendent.")
+numbered(doc, "Extraire l'archive, en conservant le dossier lib/ : les notebooks d'export (01, 03, 04, 05, 14) et de restauration (08, 09, 12, 13, 15) en dépendent.")
 numbered(doc, "Reporter dans votre databricks.yml vos valeurs (backup_root, host de chaque cible, notification_email, rétentions) et le nouveau bloc driver_node_type_id du job quotidien.")
 numbered(doc, "Toujours dans votre databricks.yml : supprimer la variable lib_path (bloc variables et "
               "cibles), remplacer ${var.lib_path} par ${workspace.file_path}/lib dans les paramètres "
