@@ -410,6 +410,17 @@ bullet(doc, "diag_01_audit mesure le contenu des volumes managés (fichiers, tai
 bullet(doc, "Nouveau diag_03_backup_coverage : rapport HTML + Excel de tous les objets du metastore "
             "et du workspace, avec pour chacun le moyen de restauration (backup, as code, autre) "
             "ou son absence, les droits du compte de backup et le résultat du dernier backup.")
+bullet(doc, "Nouveau diag_04_protected_tables : pour chaque table à filtre de lignes ou masque de "
+            "colonnes, indique si le compte qui l'exécute voit toutes les lignes et les valeurs réelles "
+            "(COMPLETE, LIGNES_FILTREES, VALEURS_MASQUEES). À lancer sous l'identité du job de backup : "
+            "c'est la condition pour qu'une copie par lecture de ces tables soit complète.")
+
+add_note(
+    doc,
+    "is_account_group_member() teste un groupe du compte Databricks, pas un groupe local au "
+    "workspace : un compte membre du groupe « admins » du workspace n'est pas exempté par "
+    "is_account_group_member('admins'). Vérifié sur l'environnement de test.",
+)
 
 add_heading(doc, "3.4 Export complet du workspace", 2)
 

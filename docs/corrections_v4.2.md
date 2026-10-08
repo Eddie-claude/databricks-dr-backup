@@ -46,6 +46,14 @@ colonnes signalées « données non sauvegardées » ; une vue en erreur au clon
 un échec ; alerte si le compte de backup n'a pas `USE CATALOG` sur `system`. Les règles v4.1 restent
 appliquées à un backup v4.1 (jobs sans tâches, seul `/Shared` exporté…).
 
+## Contrôle des tables protégées (`diag_04_protected_tables`)
+
+Pour chaque table à filtre de lignes ou masque de colonnes, appelle les fonctions de filtre et de
+masque sous l'identité qui exécute le notebook (à lancer en « Run as » du compte de backup) et rend un
+verdict : COMPLETE (toutes les lignes, valeurs réelles), LIGNES_FILTREES, VALEURS_MASQUEES, INDETERMINE.
+Prérequis d'une éventuelle copie par lecture (CTAS) de ces tables. Vérifié sur KeyIT dev contre les
+lignes et valeurs réellement visibles (4 cas sur 4).
+
 ## Effets visibles après la mise à jour
 
 - Le **premier run recopie toutes les tables une fois** : plus long que d'habitude.
