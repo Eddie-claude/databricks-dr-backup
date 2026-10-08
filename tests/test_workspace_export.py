@@ -1,4 +1,5 @@
 # tests/test_workspace_export.py
+import pytest
 from lib.workspace_export import (
     explicit_acl, import_request, notebook_manifest_path, pipeline_create_payload, remap_path,
 )
@@ -148,3 +149,39 @@ def test_no_retry_on_client_error():
     calls = []
     r = call_with_retry(lambda: calls.append(1) or _resp(404), sleep=lambda s: None)
     assert r.status_code == 404 and len(calls) == 1
+
+
+# ── Objet déjà présent à la restauration (jobs, pipelines) ───────────────
+
+from lib.workspace_export import conflict_action, job_reset_payload, pipeline_edit_payload
+
+
+def test_absent_object_is_created_whatever_the_mode():
+    assert conflict_action("skip", exists=False) == "create"
+    assert conflict_action("replace", exists=False) == "create"
+
+
+def test_existing_object_is_skipped_or_replaced_in_place():
+    assert conflict_action("skip", exists=True) == "skip"
+    assert conflict_action("replace", exists=True) == "replace"
+
+
+def test_recreate_is_the_old_name_of_replace():
+    # « recreate » créait un second job à côté de l'existant (deux exécutions planifiées) et
+    # supprimait le pipeline existant avec ses tables : il remplace désormais en place
+    assert conflict_action("recreate", exists=True) == "replace"
+
+
+def test_unknown_mode_is_refused():
+    with pytest.raises(ValueError):
+        conflict_action("overwrite", exists=True)
+
+
+def test_job_reset_keeps_the_existing_job_id():
+    assert job_reset_payload(42, {"name": "j", "tasks": []}) == {
+        "job_id": 42, "new_settings": {"name": "j", "tasks": []}}
+
+
+def test_pipeline_edit_targets_the_existing_pipeline():
+    spec = {"id": "ancien", "pipeline_id": "ancien", "name": "p", "catalog": "c"}
+    assert pipeline_edit_payload("actuel", spec) == {"id": "actuel", "name": "p", "catalog": "c"}

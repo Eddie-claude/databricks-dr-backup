@@ -48,7 +48,8 @@ from datetime import date
 dbutils.widgets.text(     "backup_root",    "",             "Backup root (abfss://...)")
 dbutils.widgets.text(     "backup_date",    str(date.today()), "Date du backup (YYYY-MM-DD)")
 dbutils.widgets.text(     "job_filter",     "",             "Filtre nom de job (sous-chaîne, vide = tous)")
-dbutils.widgets.dropdown( "conflict_mode",  "skip",         ["skip", "recreate"], "Si job existe déjà : skip / recreate")
+dbutils.widgets.dropdown( "conflict_mode",  "skip",         ["skip", "replace", "recreate"],
+                          "Job existant : skip (inchangé) / replace (définition remplacée, même job) — recreate = ancien nom de replace")
 dbutils.widgets.dropdown( "dry_run",        "true",         ["true", "false"],    "Dry-run (true = simulation)")
 # lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
 _nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
@@ -205,7 +206,7 @@ print(f"[OK] {len(existing_jobs)} job(s) existant(s) sur le workspace")
 # COMMAND ----------
 import sys
 sys.path.insert(0, dbutils.widgets.get("lib_path"))
-from workspace_export import explicit_acl
+from workspace_export import conflict_action, explicit_acl, job_reset_payload
 
 # Permissions des jobs (v4.2+) : {ancien job_id: ACL} ; absentes des backups antérieurs
 try:
@@ -254,17 +255,19 @@ for job in jobs_to_restore:
 
     # Vérifier si le job existe déjà
     existing_id = existing_jobs.get(job_name)
-    if existing_id:
-        if conflict_mode == "skip":
-            print(f"   [SKIP] Job '{job_name}' existe déjà (id={existing_id}) — conflict_mode=skip\n")
-            results.append({
-                "job_name": job_name, "old_id": old_id,
-                "new_id": existing_id, "status": "skipped",
-            })
-            skip_count += 1
-            continue
-        else:  # recreate
-            print(f"   [INFO] Job '{job_name}' existe déjà (id={existing_id}) — conflict_mode=recreate → nouveau job créé en parallèle")
+    action = conflict_action(conflict_mode, bool(existing_id))
+    if action == "skip":
+        print(f"   [SKIP] Job '{job_name}' existe déjà (id={existing_id}) — conflict_mode=skip\n")
+        results.append({
+            "job_name": job_name, "old_id": old_id,
+            "new_id": existing_id, "status": "skipped",
+        })
+        skip_count += 1
+        continue
+    if action == "replace":
+        # Remplacement en place (jobs/reset) : même job, même historique d'exécutions. Créer un
+        # second job laissait deux jobs du même nom, planifiés tous les deux.
+        print(f"   [INFO] Job '{job_name}' existe déjà (id={existing_id}) — sa définition sera remplacée")
 
     if dry_run:
         schedule_info = ""
@@ -275,7 +278,8 @@ for job in jobs_to_restore:
         print(f"   Tâches : {', '.join(t.get('task_key', '?') for t in tasks)}")
         if schedule_info:
             print(f"   {schedule_info}")
-        print(f"   → Créerait le job via POST /api/2.1/jobs/create")
+        print(f"   → Remplacerait la définition du job id={existing_id} (POST /api/2.1/jobs/reset)"
+              if action == "replace" else "   → Créerait le job via POST /api/2.1/jobs/create")
         print(f"   → Permissions à réappliquer : {len(explicit_acl(job_permissions.get(str(old_id))))}\n")
         results.append({
             "job_name": job_name, "old_id": old_id, "new_id": None, "status": "dry_run",
@@ -286,17 +290,18 @@ for job in jobs_to_restore:
     # Création effective
     payload = strip_readonly_fields(settings)
     try:
-        r = requests.post(
-            f"{host}/api/2.1/jobs/create",
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
+        if action == "replace":
+            r = requests.post(f"{host}/api/2.1/jobs/reset", headers=headers,
+                              json=job_reset_payload(existing_id, payload), timeout=30)
+        else:
+            r = requests.post(f"{host}/api/2.1/jobs/create", headers=headers, json=payload, timeout=30)
         if r.ok:
-            new_id = r.json().get("job_id")
-            print(f"   [OK] Job créé — nouveau id={new_id} — permissions : {restore_job_permissions(old_id, new_id)}\n")
+            new_id = existing_id if action == "replace" else r.json().get("job_id")
+            verb = "remplacé (même id)" if action == "replace" else "créé"
+            print(f"   [OK] Job {verb} — id={new_id} — permissions : {restore_job_permissions(old_id, new_id)}\n")
             results.append({
-                "job_name": job_name, "old_id": old_id, "new_id": new_id, "status": "created",
+                "job_name": job_name, "old_id": old_id, "new_id": new_id,
+                "status": "replaced" if action == "replace" else "created",
             })
             ok_count += 1
         else:
@@ -320,7 +325,7 @@ for job in jobs_to_restore:
 
 # COMMAND ----------
 if not dry_run:
-    created = [r for r in results if r["status"] == "created"]
+    created = [r for r in results if r["status"] in ("created", "replaced")]
     if created:
         print("── Mapping job_id ─────────────────────────────────────")
         print(f"  {'Nom':<40} {'Ancien ID':>10} {'Nouveau ID':>10}")

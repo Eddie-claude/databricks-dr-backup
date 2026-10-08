@@ -35,7 +35,8 @@ def _uc_head(path: str) -> str:
 dbutils.widgets.text(     "backup_root",     "", "Backup root (abfss://...)")
 dbutils.widgets.text(     "backup_date",     str(date.today()), "Date du backup (YYYY-MM-DD)")
 dbutils.widgets.text(     "pipeline_filter", "", "Filtre nom de pipeline (sous-chaîne, vide = tous)")
-dbutils.widgets.dropdown( "conflict_mode",   "skip", ["skip", "recreate"], "Si le pipeline existe : skip / recreate")
+dbutils.widgets.dropdown( "conflict_mode",   "skip", ["skip", "replace", "recreate"],
+                          "Pipeline existant : skip (inchangé) / replace (définition mise à jour, même pipeline) — recreate = ancien nom de replace")
 dbutils.widgets.dropdown( "include_bundle",  "false", ["false", "true"], "Restaurer aussi les pipelines déployés par bundle")
 dbutils.widgets.dropdown( "dry_run",         "true", ["true", "false"], "Dry-run (true = simulation)")
 # lib/ est déployé par le bundle à côté de notebooks/ : …/files/notebooks/x → …/files/lib
@@ -51,7 +52,7 @@ include_bundle  = dbutils.widgets.get("include_bundle") == "true"
 dry_run         = dbutils.widgets.get("dry_run").lower() == "true"
 
 sys.path.insert(0, dbutils.widgets.get("lib_path"))
-from workspace_export import explicit_acl, pipeline_create_payload
+from workspace_export import conflict_action, explicit_acl, pipeline_create_payload, pipeline_edit_payload
 
 if not backup_root:
     raise ValueError("backup_root est vide — renseignez le chemin abfss://...")
@@ -97,45 +98,51 @@ for p in selected:
         print("   [SKIP] Déployé par un bundle — à redéployer avec `databricks bundle deploy`\n")
         results.append({"name": name, "status": "skipped", "reason": "bundle"})
         continue
-    if name in existing:
-        if conflict_mode == "skip":
-            print(f"   [SKIP] Existe déjà (id={existing[name]})\n")
-            results.append({"name": name, "status": "skipped", "reason": "existe"})
-            continue
-        if not dry_run:
-            requests.delete(f"{host}/api/2.0/pipelines/{existing[name]}", headers=headers, timeout=30)
-        print(f"   [INFO] Existant {'supprimé' if not dry_run else 'serait supprimé'} (conflict_mode=recreate)")
+    action = conflict_action(conflict_mode, name in existing)
+    if action == "skip":
+        print(f"   [SKIP] Existe déjà (id={existing[name]})\n")
+        results.append({"name": name, "status": "skipped", "reason": "existe"})
+        continue
     if dry_run:
-        print("   → Créerait le pipeline via POST /api/2.0/pipelines\n")
+        print(f"   → Mettrait à jour la définition du pipeline id={existing[name]} (PUT /api/2.0/pipelines)\n"
+              if action == "replace" else "   → Créerait le pipeline via POST /api/2.0/pipelines\n")
         results.append({"name": name, "status": "dry_run"})
         continue
 
-    r = requests.post(f"{host}/api/2.0/pipelines", headers=headers, json=pipeline_create_payload(spec), timeout=60)
+    if action == "replace":
+        # Mise à jour en place : supprimer le pipeline supprimerait aussi les tables qu'il gère
+        new_id = existing[name]
+        r = requests.put(f"{host}/api/2.0/pipelines/{new_id}", headers=headers,
+                         json=pipeline_edit_payload(new_id, spec), timeout=60)
+    else:
+        r = requests.post(f"{host}/api/2.0/pipelines", headers=headers, json=pipeline_create_payload(spec), timeout=60)
     if not r.ok:
         print(f"   [ERROR] {r.status_code} — {r.text[:200]}\n")
         results.append({"name": name, "status": "error", "error": r.text[:300]})
         continue
-    new_id = r.json().get("pipeline_id")
+    if action == "create":
+        new_id = r.json().get("pipeline_id")
     perm = "aucune"
     if acl:
         pr = requests.patch(f"{host}/api/2.0/permissions/pipelines/{new_id}", headers=headers,
                             json={"access_control_list": acl}, timeout=30)
         perm = f"{len(acl)} appliquée(s)" if pr.ok else f"ÉCHEC {pr.status_code} {pr.text[:120]}"
-    print(f"   [OK] Créé — id={new_id} — permissions : {perm}\n")
-    results.append({"name": name, "status": "created", "new_id": new_id, "old_id": p.get("pipeline_id")})
+    print(f"   [OK] {'Mis à jour (même id)' if action == 'replace' else 'Créé'} — id={new_id} — permissions : {perm}\n")
+    results.append({"name": name, "status": "replaced" if action == "replace" else "created",
+                    "new_id": new_id, "old_id": p.get("pipeline_id")})
 
 # COMMAND ----------
 def count(status):
     return sum(1 for r in results if r["status"] == status)
 
-ok = count("dry_run" if dry_run else "created")
+ok = count("dry_run") if dry_run else count("created") + count("replaced")
 print(f"""
 ╔══════════════════════════════════════════════════════╗
 ║    {"DRY-RUN — " if dry_run else ""}RESTAURATION PIPELINES — RÉSUMÉ
 ╠══════════════════════════════════════════════════════╣
 ║  Date backup      : {backup_date:<33} ║
 ║  Sélectionnés     : {len(selected):<33} ║
-║  Créés            : {ok:<33} ║
+║  Créés / remplacés: {ok:<33} ║
 ║  Ignorés (skip)   : {count("skipped"):<33} ║
 ║  Erreurs          : {count("error"):<33} ║
 ╚══════════════════════════════════════════════════════╝

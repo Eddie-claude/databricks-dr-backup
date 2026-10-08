@@ -111,3 +111,28 @@ def call_with_retry(do, retries: int = 6, base_delay: float = 2.0, sleep=None):
 def pipeline_create_payload(spec: dict) -> dict:
     """Corps de POST /api/2.0/pipelines à partir de la spec sauvegardée (sans identifiant)."""
     return {k: v for k, v in spec.items() if k not in ("id", "pipeline_id")}
+
+
+# conflict_mode des restaurations de jobs et de pipelines. « recreate » est l'ancien nom de
+# « replace » : il créait un second job à côté de l'existant (deux exécutions planifiées) et
+# supprimait le pipeline existant, et avec lui les tables qu'il gère.
+CONFLICT_MODES = {"skip": "skip", "replace": "replace", "recreate": "replace"}
+
+
+def conflict_action(mode: str, exists: bool) -> str:
+    """'create' si l'objet est absent ; sinon 'skip' (laissé tel quel) ou 'replace' (définition
+    remplacée en place : même identifiant, même historique)."""
+    if mode not in CONFLICT_MODES:
+        raise ValueError(f"conflict_mode inconnu : {mode} (attendu : skip ou replace)")
+    return "create" if not exists else CONFLICT_MODES[mode]
+
+
+def job_reset_payload(job_id, settings: dict) -> dict:
+    """Corps de POST /api/2.1/jobs/reset : remplace la définition, garde l'identifiant et l'historique."""
+    return {"job_id": job_id, "new_settings": settings}
+
+
+def pipeline_edit_payload(pipeline_id: str, spec: dict) -> dict:
+    """Corps de PUT /api/2.0/pipelines/{id} : met à jour le pipeline existant sans le supprimer
+    (supprimer un pipeline supprime les tables qu'il gère)."""
+    return {**pipeline_create_payload(spec), "id": pipeline_id}

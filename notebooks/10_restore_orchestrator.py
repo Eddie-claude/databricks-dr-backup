@@ -59,7 +59,8 @@ dbutils.widgets.text(       "catalog_filter", "",          "Catalogs à restaure
 
 # Paramètres jobs (utilisés si scope contient 'jobs')
 dbutils.widgets.text(       "job_filter",     "",          "Filtre nom de job (vide = tous)")
-dbutils.widgets.dropdown(   "conflict_mode",  "skip",      ["skip", "recreate"], "Jobs existants : skip / recreate")
+dbutils.widgets.dropdown(   "conflict_mode",  "skip",      ["skip", "replace"],
+                            "Jobs / pipelines existants : skip (inchangés) / replace (définition remplacée en place)")
 
 # Filtres de périmètre : sans eux, une restauration réelle reprenait TOUT le workspace sauvegardé
 # (notebooks et droits de tous les utilisateurs), tous les pipelines et tous les volumes
