@@ -201,7 +201,9 @@ def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2", pro
         if sub in ("MANAGED", "EXTERNAL"):
             if protected:
                 return "SCRIPT", "NONE", ("Filtre de lignes ou masque de colonnes : DEEP CLONE refusé, données "
-                                          "non sauvegardées (exempter le compte de backup ou couvrir autrement)")
+                                          "non sauvegardées, quel que soit le compte. À couvrir autrement : "
+                                          "reconstruction depuis la source, copie par lecture (CTAS), ou filtre "
+                                          "porté par une vue plutôt que par la table")
             if fmt == "DELTA":
                 return "SCRIPT", "SCRIPT", "DDL + DEEP CLONE incrémental (point-in-time sur la rétention quotidienne)"
             return "SCRIPT", "NONE", f"Format {fmt or 'inconnu'} : DDL exporté, DEEP CLONE non garanti"
