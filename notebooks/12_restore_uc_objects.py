@@ -145,6 +145,7 @@ def execute(stmts: list, kind: str, max_passes: int = 1) -> None:
         print(f"  [ERROR] {kind} {label_of(stmt)}\n          → {err[:200]}")
         results.append({"kind": kind, "object": label_of(stmt), "status": "error", "error": err[:300]})
 
+# COMMAND ----------
 # MAGIC %md ## Étape 2b — Objets déjà présents
 
 # COMMAND ----------
