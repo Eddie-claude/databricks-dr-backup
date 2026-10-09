@@ -96,6 +96,15 @@ def etat_tables():
             v = _rows(f"""SELECT view_definition d FROM {CATALOG}.information_schema.views
                           WHERE table_schema = '{t['s']}' AND table_name = '{t['n']}'""")
             e["definition"] = " ".join((v[0]["d"] if v else "").split())
+        elif t["ty"] == "METRIC_VIEW":
+            # Pas de SELECT direct sur une metric view : on compare sa définition YAML et son résultat
+            info = json.loads(spark.sql(f"DESCRIBE TABLE EXTENDED {fqn} AS JSON").first()[0])
+            e["definition"] = (info.get("view_text") or "").strip()
+            e["comment"] = info.get("comment")
+            try:
+                e["mesure"] = str(spark.sql(f"SELECT MEASURE(total) FROM {fqn}").first()[0])
+            except Exception as ex:
+                e["mesure"] = f"ERREUR {short(ex)}"
         else:
             try:
                 r = spark.sql(f"SELECT count(*) c, coalesce(sum(hash(*)), 0) h FROM {fqn}").first()

@@ -83,6 +83,9 @@ if mode == "backup":
     check("2 tables", "DDL de la vue qualifiée par son catalogue (rejouable hors du catalogue courant)",
           f"{CATALOG}.finance.v_ca" in tables_sql,
           next((l for l in (head(f"{meta}/03_tables.sql") or "").splitlines() if "v_ca" in l), ""))
+    check("2 tables", "DDL de la metric view mv_ca exportée (WITH METRICS, qualifiée)",
+          f"create view {CATALOG}.finance.mv_ca" in tables_sql and "with metrics" in tables_sql,
+          next((l for l in (head(f"{meta}/03_tables.sql") or "").splitlines() if "mv_ca" in l), ""))
 
     # 3 — définitions des volumes
     vs = norm(vols_sql)
@@ -182,10 +185,11 @@ if mode == "restore":
     v1, v2 = load_json("attendu_v1.json"), load_json("attendu_v2.json")
     now = etat()
     NOT_BY_NOTEBOOKS = {f"{CATALOG}.finance.v_ca": "vue : DDL restaurée par scripts/restore_uc.py, pas par les notebooks",
+                        f"{CATALOG}.finance.mv_ca": "metric view : DDL restaurée par scripts/restore_uc.py",
                         f"{CATALOG}.rh.salaires": "table à filtre de lignes : jamais copiée (clone refusé)"}
 
     for fqn, e in v2["tables"].items():
-        if e["type"] == "VIEW" and fqn in now["tables"]:
+        if e["type"] in ("VIEW", "METRIC_VIEW") and fqn in now["tables"]:
             # DDL rejouée depuis 03_tables.sql (comme scripts/restore_uc.py)
             check("2 tables", f"vue {fqn} recréée dans son catalogue, même définition",
                   now["tables"][fqn] == e, f"attendu {e} / obtenu {now['tables'][fqn]}")

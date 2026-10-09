@@ -45,6 +45,20 @@ sql(f"""CREATE VIEW {CATALOG}.finance.v_ca COMMENT 'Chiffre d''affaires par rég
         SELECT c.region, sum(t.montant) AS ca
         FROM {CATALOG}.finance.transactions t JOIN {CATALOG}.finance.clients c USING (client_id)
         GROUP BY c.region""")
+# Metric view : SHOW CREATE TABLE la refuse sur le runtime des jobs, 01 reconstruit sa DDL depuis le YAML
+spark.sql(f"""CREATE VIEW {CATALOG}.finance.mv_ca WITH METRICS LANGUAGE YAML
+COMMENT 'Metric view de test'
+AS $$
+version: 0.1
+source: {CATALOG}.finance.transactions
+dimensions:
+  - name: client
+    expr: client_id
+measures:
+  - name: total
+    expr: SUM(montant)
+$$""")
+print(f"[OK] CREATE VIEW {CATALOG}.finance.mv_ca WITH METRICS")
 
 # COMMAND ----------
 # MAGIC %md ## Tables que le backup ne peut pas copier (écart rapport / restauration)
