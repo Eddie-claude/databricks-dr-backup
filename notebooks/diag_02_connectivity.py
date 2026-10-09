@@ -16,7 +16,7 @@
 # MAGIC
 # MAGIC | Paramètre | Exemple |
 # MAGIC |-----------|---------|
-# MAGIC | `backup_root` | `abfss://uc-data@st10keyitdpdrpdevchn00.dfs.core.windows.net/backup-dev` |
+# MAGIC | `backup_root` | `abfss://<container>@<compte>.dfs.core.windows.net/backup` |
 # MAGIC | `test_table` | `my_catalog.my_schema.my_table` (vide = auto-sélection de la plus petite table Delta) |
 
 # COMMAND ----------
