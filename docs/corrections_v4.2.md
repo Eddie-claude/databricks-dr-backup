@@ -2,7 +2,7 @@
 
 Synthèse des corrections ; le détail est dans `DR_Backup_Notes_de_Version_v4.2.docx` (§ indiqués).
 Validé par un test aller-retour complet (backup → sinistre → restauration) sur KeyIT dev le
-2026-10-07, et par 153 tests automatisés.
+2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 223 tests automatisés.
 
 ## Pertes de données silencieuses
 
