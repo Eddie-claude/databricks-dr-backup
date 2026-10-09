@@ -103,6 +103,10 @@ add_table(
          "Tables absentes du backup de la date de référence (§2.15)"],
         ["Trois nouveaux filtres dans 10_restore_orchestrator",
          "notebook_filter, pipeline_filter, volume_filter (§2.16)"],
+        ["Deux nouveaux jobs dans Workflows, en pause : dr-backup-grants-sync et dr-backup-coverage-report",
+         "Synchronisation des droits du compte de backup (§3.6) et rapport de couverture mensuel (§3.3)"],
+        ["Les metric views apparaissent dans uc_metadata/03_tables.sql (CREATE VIEW … WITH METRICS)",
+         "Leur définition est désormais sauvegardée et restaurable (§2.17)"],
     ],
     col_widths=[6.5, 9.5],
 )
