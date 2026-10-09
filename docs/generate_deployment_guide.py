@@ -529,6 +529,14 @@ add_note(
     "prudence les règles de la v4.1, qui classent à tort volumes, fonctions et pipelines en « non couvert ».",
 )
 
+doc.add_paragraph(
+    "Deux façons de le produire : à la demande, en ouvrant le notebook avec un compte admin du "
+    "metastore ; ou par le job dr-backup-coverage-report, livré en pause, planifié le 1er de chaque "
+    "mois à 06:00 UTC (après le snapshot mensuel). Le job s'exécute avec l'identité qui déploie le "
+    "bundle, qui doit être admin du metastore, et écrit un rapport daté dans le dossier "
+    "coverage_output_dir (par défaut /Workspace/Shared/dr-backup-rapports)."
+)
+
 add_heading(doc, "Lire le rapport", 3)
 
 doc.add_paragraph(
@@ -676,6 +684,8 @@ add_table(
                              "obligatoire, le job échoue s'il est vide"],
         ["backup_location", "Nom de l'External Location du backup (§2.4)"],
         ["grants_sync_mode", "report (défaut) puis apply une fois le premier constat validé (§8)"],
+        ["coverage_output_dir", "Dossier du workspace des rapports de couverture (défaut /Workspace/Shared/dr-backup-rapports)"],
+        ["iac_identities", "Facultatif : identités qui déploient l'IaC, pour classer leurs objets « as code » (§3.4)"],
     ],
     col_widths=[5, 11],
 )
@@ -835,7 +845,7 @@ add_code(
     "databricks bundle deploy   --target prod --profile prod",
 )
 
-doc.add_paragraph("Le déploiement crée trois jobs, tous en pause :")
+doc.add_paragraph("Le déploiement crée quatre jobs, tous en pause :")
 
 add_table(
     doc,
@@ -844,6 +854,7 @@ add_table(
         ["dr-backup-daily", "Sauvegarde quotidienne incrémentale, rétention, VACUUM", "01:00 UTC, en pause"],
         ["dr-backup-monthly", "Archive mensuelle complète par DEEP CLONE", "1er du mois, 02:00 UTC, en pause"],
         ["dr-backup-grants-sync", "Vérifie / accorde les droits du compte de backup (§8)", "00:30 UTC, en pause"],
+        ["dr-backup-coverage-report", "Rapport de couverture, lecture seule (§3.4)", "1er du mois, 06:00 UTC, en pause"],
     ],
     col_widths=[4.5, 8, 3.5],
 )
@@ -1266,6 +1277,7 @@ add_table(
         ["dr-backup-grants-sync", "Chaque nuit à 00:30 UTC, avant le backup", "30 minutes"],
         ["dr-backup-daily", "Chaque nuit à 01:00 UTC", "8 heures"],
         ["dr-backup-monthly", "Le 1er de chaque mois à 02:00 UTC", "24 heures"],
+        ["dr-backup-coverage-report", "Le 1er de chaque mois à 06:00 UTC", "1 heure"],
     ],
     col_widths=[4.5, 7, 4.5],
 )
@@ -1486,7 +1498,7 @@ add_table(
         ["", "databricks.yml adapté à l'environnement", "4.2"],
         ["", "Profil CLI configuré et connexion vérifiée", "4.3"],
         ["", "Test de connectivité de bout en bout réussi", "4.4"],
-        ["", "Bundle déployé, trois jobs visibles dans Workflows (daily, monthly, grants-sync)", "4.5"],
+        ["", "Bundle déployé, quatre jobs visibles dans Workflows (daily, monthly, grants-sync, coverage-report)", "4.5"],
         ["", "Cluster dimensionné selon le nombre de tables", "5.1"],
         ["", "Premier backup exécuté manuellement", "5.4"],
         ["", "Les 8 points de validation sont vérifiés", "7"],

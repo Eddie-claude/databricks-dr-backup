@@ -55,7 +55,7 @@ Il distingue deux scénarios :
 
 ### Avant de restaurer : savoir ce qui est restaurable
 
-Le notebook `diag_03_backup_coverage` (lecture seule, compte admin du metastore) produit un rapport HTML + Excel qui indique pour chaque objet du metastore et du workspace s'il est restaurable par le backup, par l'IaC, par un autre moyen — ou pas du tout. À tenir à jour et à consulter avant un exercice de restauration. Toujours renseigner `backup_root` (sinon les règles v4.1 sont appliquées) et `backup_principal`.
+Le notebook `diag_03_backup_coverage` (lecture seule, compte admin du metastore) produit un rapport HTML + Excel qui indique pour chaque objet du metastore et du workspace s'il est restaurable par le backup, par l'IaC, par un autre moyen — ou pas du tout. À tenir à jour et à consulter avant un exercice de restauration : le job `dr-backup-coverage-report` (en pause par défaut, mensuel) le produit automatiquement dans un dossier partagé. Toujours renseigner `backup_root` (sinon les règles v4.1 sont appliquées) et `backup_principal`.
 
 | Verdict | Lecture | Action |
 |---------|---------|--------|

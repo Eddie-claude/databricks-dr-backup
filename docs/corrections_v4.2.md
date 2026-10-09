@@ -46,6 +46,10 @@ colonnes signalées « données non sauvegardées » ; une vue en erreur au clon
 un échec ; alerte si le compte de backup n'a pas `USE CATALOG` sur `system`. Les règles v4.1 restent
 appliquées à un backup v4.1 (jobs sans tâches, seul `/Shared` exporté…).
 
+Job `dr-backup-coverage-report` (livré en pause, le 1er du mois à 06:00 UTC) : produit le rapport
+chaque mois dans `coverage_output_dir`, avec l'identité admin qui déploie le bundle. Vérifié sur
+KeyIT dev (run en succès, rapport HTML + Excel écrit).
+
 ## Contrôle des tables protégées (`diag_04_protected_tables`)
 
 Pour chaque table à filtre de lignes ou masque de colonnes, appelle les fonctions de filtre et de

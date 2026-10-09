@@ -39,6 +39,12 @@ variables:
   grants_sync_mode:
     description: "dr-backup-grants-sync : report (constat, échec + notification si écart) ou apply (accorde les droits manquants)"
     default: "report"
+  coverage_output_dir:
+    description: "Dossier du workspace où dr-backup-coverage-report écrit le rapport de couverture (HTML + Excel), un fichier daté par exécution"
+    default: "/Workspace/Shared/dr-backup-rapports"
+  iac_identities:
+    description: "Identités qui déploient l'IaC (SP Terraform, SP bundle), séparées par des virgules : les objets qu'elles ont créés sont classés « as code » dans le rapport de couverture"
+    default: ""
 
 # ── Ressources ────────────────────────────────────────────────────────────────
 resources:
@@ -225,6 +231,51 @@ resources:
               backup_location:   ${var.backup_location}
               excluded_catalogs: ""
               mode:              ${var.grants_sync_mode}
+          email_notifications:
+            on_failure:
+              - ${var.notification_email}
+
+    # ── Job 5 : Rapport de couverture du backup (lecture seule, mensuel) ──
+    # À exécuter avec une identité ADMIN du metastore (celle qui déploie le bundle) : le bilan
+    # doit voir tous les objets, pas seulement ceux accessibles au compte de backup.
+    dr_backup_coverage_report:
+      name: dr-backup-coverage-report
+      description: "Rapport de couverture (HTML + Excel) : pour chaque objet du metastore et du workspace, sauvegardé / as code / autre moyen / partiel / inaccessible / non couvert — lecture seule"
+
+      tags:
+        project: databricks-dr
+        managed_by: dab
+
+      schedule:
+        quartz_cron_expression: "0 0 6 1 * ?"   # 06:00 UTC le 1er du mois, après le snapshot mensuel de 02:00
+        timezone_id: UTC
+        pause_status: PAUSED
+
+      max_concurrent_runs: 1
+
+      tasks:
+        - task_key: coverage_report
+          new_cluster:
+            spark_version: "17.3.x-scala2.13"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            data_security_mode: "SINGLE_USER"
+            spark_conf:
+              spark.master: "local[*, 4]"
+              spark.databricks.cluster.profile: "singleNode"
+            custom_tags:
+              ResourceClass: "SingleNode"
+          timeout_seconds: 3600
+          notebook_task:
+            notebook_path: ./notebooks/diag_03_backup_coverage.py
+            base_parameters:
+              backup_root:             ${var.backup_root}
+              backup_principal:        ${var.backup_principal}
+              iac_identities:          ${var.iac_identities}
+              excluded_catalogs:       ""
+              backup_version:          "auto"
+              count_workspace_objects: "true"
+              output_dir:              ${var.coverage_output_dir}
           email_notifications:
             on_failure:
               - ${var.notification_email}

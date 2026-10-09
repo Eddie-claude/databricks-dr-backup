@@ -423,6 +423,9 @@ bullet(doc, "diag_01_audit mesure le contenu des volumes managés (fichiers, tai
 bullet(doc, "Nouveau diag_03_backup_coverage : rapport HTML + Excel de tous les objets du metastore "
             "et du workspace, avec pour chacun le moyen de restauration (backup, as code, autre) "
             "ou son absence, les droits du compte de backup et le résultat du dernier backup.")
+bullet(doc, "Nouveau job dr-backup-coverage-report (en pause, le 1er du mois à 06:00 UTC) : produit "
+            "chaque mois le rapport de couverture diag_03 dans un dossier partagé "
+            "(variable coverage_output_dir), avec l'identité admin qui déploie le bundle.")
 bullet(doc, "Nouveau diag_04_protected_tables : pour chaque table à filtre de lignes ou masque de "
             "colonnes, indique si le compte qui l'exécute voit toutes les lignes et les valeurs réelles "
             "(COMPLETE, LIGNES_FILTREES, VALEURS_MASQUEES). À lancer sous l'identité du job de backup : "
@@ -515,7 +518,9 @@ numbered(doc, "Toujours dans votre databricks.yml : supprimer la variable lib_pa
 numbered(doc, "Toujours dans votre databricks.yml : ajouter le job dr_backup_grants_sync (bloc complet à copier "
               "depuis le databricks.yml de l'archive) et ses trois variables : backup_principal (compte ou "
               "groupe du backup), backup_location (nom de l'External Location du backup), grants_sync_mode "
-              "(report, puis apply une fois validé). Voir guide de déploiement §8.")
+              "(report, puis apply une fois validé). Voir guide de déploiement §8. De même pour le job "
+              "dr_backup_coverage_report et ses variables coverage_output_dir et iac_identities "
+              "(facultatives, guide §3.4).")
 numbered(doc, "Accorder au compte du backup USE CATALOG sur le catalog system : "
               "GRANT USE CATALOG ON CATALOG system TO `<compte du backup>`.")
 numbered(doc, "Vérifier que le quota de vCPU de la famille ESv3 permet 8 vCPU supplémentaires dans la région, et qu'aucune politique de cluster n'interdit Standard_E8s_v3.")
