@@ -21,10 +21,15 @@
 # MAGIC | `backup_location` | External location du stockage de backup (READ FILES + WRITE FILES) |
 # MAGIC | `mode` | `report` : constat seul (défaut) · `apply` : accorde les droits manquants |
 # MAGIC
+# MAGIC Les droits du compte de backup comprennent ceux de **tous ses groupes**, imbrication comprise
+# MAGIC (API SCIM du compte), et ceux d'`account users` : un droit hérité d'un groupe n'est pas
+# MAGIC signalé manquant ni ré-accordé. Les droits manquants sont accordés à `backup_principal`.
+# MAGIC
 # MAGIC Les catalogs fédérés et Delta Sharing sont ignorés : leurs données ne sont pas sauvegardées.
 
 # COMMAND ----------
 import json
+import re
 
 import requests
 
@@ -57,6 +62,29 @@ def grant_statement(securable: str, name: str, privileges: list, principal: str)
 # Les vues information_schema de chaque catalog s'appuient sur le catalog system : sans ce droit,
 # 01_uc_metadata ne lit plus le type des tables (INSUFFICIENT_PERMISSIONS).
 SYSTEM_CATALOG_PRIVILEGES = {"USE_CATALOG"}
+
+
+def is_application_id(principal: str) -> bool:
+    """Un service principal est désigné dans les GRANT par son Application ID (UUID)."""
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", principal or ""))
+
+
+def group_closure(direct: list, parents_of) -> dict:
+    """{id: nom} des groupes atteints depuis direct [(id, nom)] en remontant parents_of(id) → [(id, nom)].
+    Les droits Unity Catalog ne sont pas listés par appartenance : le compte de backup hérite de
+    ceux de tous ses groupes, imbrication comprise (SP → groupe → groupes de privilèges)."""
+    found, todo = {}, list(direct)
+    while todo:
+        gid, name = todo.pop()
+        if gid in found:
+            continue
+        found[gid] = name
+        todo += parents_of(gid)
+    return found
+
+
+def sql_in_list(names) -> str:
+    return "(" + ", ".join("'" + n.replace("'", "''") + "'" for n in sorted(set(names))) + ")"
 # <<< REGLES
 
 principal  = dbutils.widgets.get("backup_principal").strip()
@@ -71,6 +99,43 @@ _ctx  = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
 HOST  = _ctx.apiUrl().get()
 _HDRS = {"Authorization": f"Bearer {_ctx.apiToken().get()}"}
 print(f"[OK] principal={principal} | mode={'apply' if apply_mode else 'report'} | droits requis={sorted(required)}")
+
+# COMMAND ----------
+# Groupes du compte (account) : ceux qui portent les droits Unity Catalog
+SCIM = "/api/2.0/account/scim/v2"
+
+def _scim_get(path: str, params: dict) -> dict:
+    r = requests.get(f"{HOST}{SCIM}/{path}", headers=_HDRS, params=params, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+def _scim_parents(resource: str, rid: str) -> list:
+    d = _scim_get(f"{resource}/{rid}", {"attributes": "groups"})
+    return [(g["value"], g.get("display", "")) for g in d.get("groups", []) or []]
+
+def principal_groups(principal: str) -> list:
+    """Noms de tous les groupes dont le principal est membre, directement ou par imbrication."""
+    resource, attr = (("ServicePrincipals", "applicationId") if is_application_id(principal)
+                      else ("Groups", "displayName"))
+    found = _scim_get(resource, {"filter": f'{attr} eq "{principal}"', "attributes": "id"}).get("Resources") or []
+    if not found:
+        raise ValueError(f"{principal} introuvable ({resource} du compte)")
+    groups = group_closure(_scim_parents(resource, found[0]["id"]), lambda gid: _scim_parents("Groups", gid))
+    return sorted(n for n in groups.values() if n)
+
+try:
+    groups = principal_groups(principal)
+    print(f"[OK] {principal} membre de {len(groups)} groupe(s), imbrication comprise : {', '.join(groups) or '—'}")
+except Exception as e:
+    msg = " ".join(str(e).split())[:300]
+    # Sans les groupes, des droits hérités passeraient pour manquants : en apply, ils seraient
+    # ré-accordés directement au compte de backup, en contournant les groupes de privilèges
+    if apply_mode:
+        raise RuntimeError(f"Groupes de {principal} non lisibles ({SCIM}) : mode apply interrompu — {msg}")
+    groups = []
+    print(f"[WARN] Groupes de {principal} non lisibles ({SCIM}) : seuls ses droits directs sont comparés — {msg}")
+# Les droits accordés à « account users » valent pour tout le monde, donc aussi pour le backup
+grantees = sql_in_list({principal, "account users", *groups})
 
 # COMMAND ----------
 # MAGIC %md ## 1 — Écarts par catalog
@@ -88,10 +153,9 @@ def _catalogs() -> list:
         params["page_token"] = d["next_page_token"]
 
 SKIP_TYPES = {"FOREIGN_CATALOG", "DELTASHARING_CATALOG", "SYSTEM_CATALOG", "INTERNAL_CATALOG"}
-quoted = principal.replace("'", "''")
 current = {}
 for r in spark.sql(f"""SELECT catalog_name, privilege_type FROM system.information_schema.catalog_privileges
-                       WHERE grantee = '{quoted}'""").collect():
+                       WHERE grantee IN {grantees}""").collect():
     current.setdefault(r.catalog_name.lower(), set()).add(r.privilege_type.upper().replace(" ", "_"))
 
 rows, statements = [], []
@@ -111,7 +175,7 @@ for c in sorted(_catalogs(), key=lambda c: c["name"]):
 if location:
     loc_privs = {r.privilege_type.upper().replace(" ", "_") for r in spark.sql(f"""
         SELECT privilege_type FROM system.information_schema.external_location_privileges
-        WHERE grantee = '{quoted}' AND external_location_name = '{location.replace("'", "''")}'""").collect()}
+        WHERE grantee IN {grantees} AND external_location_name = '{location.replace("'", "''")}'""").collect()}
     missing = missing_privileges({"READ_FILES", "WRITE_FILES"}, loc_privs)
     if missing:
         statements.append(grant_statement("EXTERNAL LOCATION", location, missing, principal))

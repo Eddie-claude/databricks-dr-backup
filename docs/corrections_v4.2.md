@@ -2,7 +2,8 @@
 
 Synthèse des corrections ; le détail est dans `DR_Backup_Notes_de_Version_v4.2.docx` (§ indiqués).
 Validé par un test aller-retour complet (backup → sinistre → restauration) sur KeyIT dev le
-2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 223 tests automatisés.
+2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 230 tests automatisés. Le correctif
+§ 2.20 (droits hérités des groupes, 2026-10-27) est couvert par les tests, pas encore par un run réel.
 
 ## Pertes de données silencieuses
 
@@ -37,13 +38,16 @@ Validé par un test aller-retour complet (backup → sinistre → restauration) 
 | 2.5 | Point de reprise écrit moins souvent (allège le driver). |
 | 2.2 | Catalogues fédérés et Delta Sharing exclus (définition relevant de l'IaC). |
 | 2.3 | Traces Java retirées des messages (elles tronquaient la sortie des notebooks). |
+| 2.20 | **`dr-backup-grants-sync` ignorait les droits hérités des groupes** : il les signalait manquants et, en mode apply, les aurait ré-accordés directement au compte de backup. Groupes lus par l'API SCIM du compte, imbrication comprise ; apply interrompu si les groupes sont illisibles. |
 
 ## Rapport de couverture (`diag_03_backup_coverage`)
 
 Règles alignées sur la v4.2 corrigée : jobs (tâches et permissions), pipelines, tout le workspace
 (fichiers compris, toute profondeur), metric views couvertes ; tables à filtre de lignes ou masque de
 colonnes signalées « données non sauvegardées » ; une vue en erreur au clone n'est plus comptée comme
-un échec ; alerte si le compte de backup n'a pas `USE CATALOG` sur `system`. Les règles v4.1 restent
+un échec ; alerte si le compte de backup n'a pas `USE CATALOG` sur `system`. Droits du compte de
+backup lus **avec ceux de tous ses groupes**, imbrication comprise (§ 2.20, retour du test datalab) :
+sans cela, des objets accessibles via des groupes de privilèges apparaissaient « inaccessibles ». Les règles v4.1 restent
 appliquées à un backup v4.1 (jobs sans tâches, seul `/Shared` exporté…).
 
 Job `dr-backup-coverage-report` (livré en pause, le 1er du mois à 06:00 UTC) : produit le rapport

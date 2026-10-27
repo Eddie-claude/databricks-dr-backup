@@ -16,7 +16,7 @@
 # MAGIC
 # MAGIC | Paramètre | Description |
 # MAGIC |-----------|-------------|
-# MAGIC | `backup_principal` | Groupe ou service principal (Application ID) qui exécute le backup — vide = droits non vérifiés |
+# MAGIC | `backup_principal` | Groupe ou service principal (Application ID) qui exécute le backup — vide = droits non vérifiés. Les droits de tous ses groupes, imbrication comprise, sont pris en compte (API SCIM du compte) |
 # MAGIC | `iac_identities` | Identités qui déploient l'IaC (SP Terraform, SP bundle), séparées par des virgules : un objet qu'elles ont créé est classé « as code » |
 # MAGIC | `iac_file` | (optionnel) Fichier listant les objets gérés en code, un nom complet par ligne (`catalog.schema.objet`, nom d'external location…) |
 # MAGIC | `excluded_catalogs` | Catalogs exclus volontairement du backup (séparés par des virgules) |
@@ -101,6 +101,8 @@ print(f"[OK] Exécuté par {current_user} sur {HOST} — {run_at:%Y-%m-%d %H:%M}
 
 # COMMAND ----------
 # >>> REGLES
+import re
+
 # Couverture d'une définition ou de données :
 #   SCRIPT = notebooks de backup DR | IAC = recréé par l'infrastructure as code
 #   OTHER  = autre moyen (données hors Databricks, Git, recalcul) | NONE = non couvert | NA = sans objet
@@ -173,6 +175,29 @@ def missing_system_access(system_privs: set) -> bool:
     """Le compte de backup lit information_schema, qui s'appuie sur le catalog system : sans USE
     CATALOG dessus, le type des tables est illisible (cas client : 4 295 vues envoyées au clone)."""
     return not ({"USE_CATALOG", "ALL_PRIVILEGES"} & set(system_privs))
+
+
+def is_application_id(principal: str) -> bool:
+    """Un service principal est désigné dans les GRANT par son Application ID (UUID)."""
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", principal or ""))
+
+
+def group_closure(direct: list, parents_of) -> dict:
+    """{id: nom} des groupes atteints depuis direct [(id, nom)] en remontant parents_of(id) → [(id, nom)].
+    Les droits Unity Catalog ne sont pas listés par appartenance : le compte de backup hérite de
+    ceux de tous ses groupes, imbrication comprise (SP → groupe → groupes de privilèges)."""
+    found, todo = {}, list(direct)
+    while todo:
+        gid, name = todo.pop()
+        if gid in found:
+            continue
+        found[gid] = name
+        todo += parents_of(gid)
+    return found
+
+
+def sql_in_list(names) -> str:
+    return "(" + ", ".join("'" + n.replace("'", "''") + "'" for n in sorted(set(names))) + ")"
 
 
 def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2", protected: bool = False) -> tuple:
@@ -412,10 +437,37 @@ except Exception:
 # COMMAND ----------
 access_checked = bool(backup_principal)
 cat_p, sch_p, tbl_p, vol_p, fn_p = {}, {}, {}, {}, {}
+backup_groups, backup_identities = [], set()
+
+# Groupes du compte (account) : ceux qui portent les droits Unity Catalog
+SCIM = "/api/2.0/account/scim/v2"
+
+def _scim_parents(resource: str, rid: str) -> list:
+    d = api_get(f"{SCIM}/{resource}/{rid}", {"attributes": "groups"})
+    return [(g["value"], g.get("display", "")) for g in d.get("groups", []) or []]
+
+def principal_groups(principal: str) -> list:
+    """Noms de tous les groupes dont le principal est membre, directement ou par imbrication."""
+    resource, attr = (("ServicePrincipals", "applicationId") if is_application_id(principal)
+                      else ("Groups", "displayName"))
+    found = api_get(f"{SCIM}/{resource}", {"filter": f'{attr} eq "{principal}"',
+                                           "attributes": "id"}).get("Resources") or []
+    if not found:
+        raise ValueError(f"{principal} introuvable ({resource} du compte)")
+    groups = group_closure(_scim_parents(resource, found[0]["id"]), lambda gid: _scim_parents("Groups", gid))
+    return sorted(n for n in groups.values() if n)
 
 if access_checked:
+    try:
+        backup_groups = principal_groups(backup_principal)
+        print(f"[OK] Compte de backup membre de {len(backup_groups)} groupe(s), imbrication comprise : "
+              f"{', '.join(backup_groups) or '—'}")
+    except Exception as e:
+        warn(f"Groupes du compte de backup non lisibles ({SCIM}) : seuls ses droits directs sont "
+             f"vérifiés, les objets accessibles par un groupe peuvent apparaître inaccessibles — {_short(e)}")
+    backup_identities = {backup_principal, *backup_groups}
     # Les droits accordés à « account users » valent pour tout le monde, donc aussi pour le backup
-    grantees = "('" + backup_principal.replace("'", "''") + "', 'account users')"
+    grantees = sql_in_list(backup_identities | {"account users"})
     def _privs(view: str, keys: tuple) -> dict:
         out = {}
         for r in _query(f"Droits ({view})", f"SELECT * FROM {IS}.{view} WHERE grantee IN {grantees}"):
@@ -430,10 +482,12 @@ if access_checked:
 else:
     warn("backup_principal vide : les droits du compte de backup ne sont pas vérifiés")
 
+backup_ids_lower = {i.lower() for i in backup_identities}
+
 def access(kind: str, cat: str, sch: str = "", name: str = "", owner: str = ""):
     if not access_checked:
         return None
-    if owner and owner.lower() == backup_principal.lower():
+    if owner and owner.lower() in backup_ids_lower:
         return True
     cat, sch, name = cat.lower(), (sch or "").lower(), (name or "").lower()
     obj = {"TABLE": tbl_p, "VOLUME": vol_p, "FUNCTION": fn_p}.get(kind, {}).get((cat, sch, name), set())
@@ -827,7 +881,8 @@ report_html = f"""<!doctype html><html lang=fr><head><meta charset=utf-8>
 <h1>Couverture du backup DR — Databricks</h1>
 <div class=meta>Workspace {e(HOST)} · généré le {run_at:%d.%m.%Y %H:%M} par {e(current_user)} ·
 règles du backup <b>{e(backup_version)}</b>{f" · dernier backup {e(last_backup_date)}" if last_backup_date else ""}
-{f" · compte de backup <code>{e(backup_principal)}</code>" if backup_principal else ""}</div>
+{f" · compte de backup <code>{e(backup_principal)}</code>" if backup_principal else ""}
+{f" et ses {len(backup_groups)} groupe(s) : " + ", ".join(f"<code>{e(g)}</code>" for g in backup_groups) if backup_groups else ""}</div>
 <div class=kpis><div class=kpi><b>{len(df)}</b><span>objets inventoriés</span></div>{kpis}</div>
 <h2>Synthèse par type d'objet</h2>{_table(summary, "Type d'objet")}
 <h2>Synthèse par catalog</h2>{_table(by_catalog, "Catalog") if len(by_catalog) else "<p class=meta>Aucun catalog.</p>"}

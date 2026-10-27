@@ -185,3 +185,38 @@ def test_pipeline_files_are_not_covered_only_notebooks_in_v41():
     covered = R["pipeline_code_covered"]
     assert covered(["/Shared/etl/nb"], has_files=True, version="v4.1") is False
     assert covered(["/Shared/etl/nb"], has_files=False, version="v4.1") is True
+
+
+# ── Groupes du compte de backup (droits hérités) ─────────────────────────
+
+def test_application_id_designates_a_service_principal():
+    assert R["is_application_id"]("e62e22db-b85b-46bd-a1d1-3ce711b64726") is True
+    assert R["is_application_id"]("g_sps_it_dr_backup_datalab") is False
+    assert R["is_application_id"]("") is False
+
+
+def test_group_closure_follows_nesting():
+    # SP → g_sps_it_dr_backup_datalab → p_prd_* → groupe de rôle (cas client : droits portés par p_prd_*)
+    parents = {"g1": [("p1", "p_prd_sinistres_lab_select"), ("p2", "p_prd_gm_source_lab_use")],
+               "p1": [("r1", "r_lecteurs")], "p2": [], "r1": []}
+    found = R["group_closure"]([("g1", "g_sps_it_dr_backup_datalab")], lambda gid: parents[gid])
+    assert set(found.values()) == {"g_sps_it_dr_backup_datalab", "p_prd_sinistres_lab_select",
+                                   "p_prd_gm_source_lab_use", "r_lecteurs"}
+
+
+def test_group_closure_tolerates_cycles_and_shared_parents():
+    parents = {"a": [("b", "B"), ("c", "C")], "b": [("c", "C"), ("a", "A")], "c": [("a", "A")]}
+    calls = []
+    def parents_of(gid):
+        calls.append(gid)
+        return parents[gid]
+    assert R["group_closure"]([("a", "A")], parents_of) == {"a": "A", "b": "B", "c": "C"}
+    assert sorted(calls) == ["a", "b", "c"]          # chaque groupe lu une seule fois
+
+
+def test_group_closure_without_groups():
+    assert R["group_closure"]([], lambda gid: []) == {}
+
+
+def test_sql_in_list_quotes_and_dedups():
+    assert R["sql_in_list"](["account users", "o'brien", "account users"]) == "('account users', 'o''brien')"

@@ -378,6 +378,18 @@ doc.add_paragraph(
     "version du backup doit prévaloir."
 )
 
+add_heading(doc, "2.20 Droits hérités des groupes ignorés", 2)
+
+doc.add_paragraph(
+    "Le rapport de couverture et dr-backup-grants-sync ne voyaient que les droits accordés directement au "
+    "compte de backup (et à account users). Quand ces droits passent par des groupes (SP → groupe du "
+    "backup → groupes de privilèges), le rapport classait à tort les objets « inaccessibles » et le job de "
+    "synchronisation les signalait manquants — en mode apply, il les aurait ré-accordés directement au "
+    "compte de backup, en contournant les groupes de privilèges. Les deux lisent désormais tous les groupes "
+    "du compte de backup, imbrication comprise, par l'API SCIM du compte ; un objet dont l'un de ces groupes "
+    "est propriétaire est accessible. Le rapport liste ces groupes dans son en-tête."
+)
+
 doc.add_page_break()
 
 

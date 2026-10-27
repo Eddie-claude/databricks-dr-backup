@@ -510,7 +510,8 @@ add_table(
     doc,
     ["Paramètre", "Rôle"],
     [
-        ["backup_principal", "Groupe ou service principal du backup : vérifie qu'il a les droits sur chaque objet (vide = non vérifié)"],
+        ["backup_principal", "Groupe ou service principal du backup : vérifie qu'il a les droits sur chaque objet, "
+                             "y compris ceux hérités de ses groupes (vide = non vérifié)"],
         ["backup_root", "Racine du backup : contrôle le résultat du dernier backup réel et détecte la version déployée"],
         ["backup_version", "auto (détectée depuis backup_root), v4.1 ou v4.2 : règles de couverture appliquées"],
         ["iac_identities", "Identités qui déploient l'IaC : les objets qu'elles ont créés sont classés « as code »"],
@@ -1295,6 +1296,22 @@ bullet(doc, "Mode report (défaut) : constat seul. En cas d'écart, le job écho
             "notification ; sa sortie liste chaque objet (OK / manquant) et les GRANT à accorder.")
 bullet(doc, "Mode apply : le job accorde lui-même les droits manquants. C'est le mode à retenir en "
             "exploitation, une fois le mode report validé sur un run.")
+doc.add_paragraph(
+    "Les droits comparés sont les droits effectifs du compte de backup : les siens, ceux d'account users "
+    "et ceux de tous les groupes dont il est membre, imbrication comprise (SP → groupe du backup → groupes "
+    "de privilèges). Les groupes sont lus par l'API SCIM du compte (/api/2.0/account/scim/v2) ; le rapport "
+    "de couverture (diag_03) applique la même règle. Si les groupes ne sont pas lisibles, le mode report "
+    "compare les seuls droits directs (avertissement dans la sortie) et le mode apply s'interrompt, pour ne "
+    "pas ré-accorder au compte de backup des droits qu'il tient déjà d'un groupe."
+)
+add_note(
+    doc,
+    "le job contrôle les droits au niveau du catalog. Si les droits du backup sont accordés schéma par "
+    "schéma, par exemple via des groupes de privilèges, les catalogs restent signalés « manquant » : ce "
+    "constat est fondé (un nouveau schéma ne serait pas couvert), mais le mode apply accorderait alors "
+    "les droits sur tout le catalog, directement au compte de backup. Dans cette organisation, garder le "
+    "mode report et accorder les droits par les groupes de privilèges.",
+)
 add_note(
     doc,
     "le job s'exécute avec l'identité qui déploie le bundle, qui doit être admin du metastore pour "

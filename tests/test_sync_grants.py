@@ -34,3 +34,20 @@ def test_system_catalog_use_is_required():
     assert R["SYSTEM_CATALOG_PRIVILEGES"] == {"USE_CATALOG"}
     assert R["grant_statement"]("CATALOG", "system", ["USE_CATALOG"], "sp-backup") == \
         "GRANT USE CATALOG ON CATALOG `system` TO `sp-backup`"
+
+
+def test_group_rules_identical_to_coverage_report():
+    # Les deux notebooks sont livrés autonomes : mêmes règles de groupes, copie à l'identique
+    cov = (Path(__file__).resolve().parent.parent / "notebooks" / "diag_03_backup_coverage.py").read_text(encoding="utf-8")
+    def block(src):
+        start = src.index("def is_application_id")
+        end = src.index('for n in sorted(set(names))) + ")"', start)
+        return src[start:src.index("\n", end)]
+    assert block(SRC) == block(cov)
+
+
+def test_group_closure_and_grantees():
+    parents = {"g1": [("p1", "p_prd_datascience_lab_select")], "p1": []}
+    groups = R["group_closure"]([("g1", "g_sps_it_dr_backup_datalab")], lambda gid: parents[gid])
+    assert R["sql_in_list"]({"sp", "account users", *groups.values()}) == \
+        "('account users', 'g_sps_it_dr_backup_datalab', 'p_prd_datascience_lab_select', 'sp')"
