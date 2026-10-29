@@ -66,22 +66,61 @@ monthly_root     = f"{backup_root}/snapshots/monthly"
 print(f"[OK] daily={retain_daily}j | weekly={retain_weekly}sem | monthly={retain_monthly}mois | dry_run={dry_run} | force={force_snapshot} | enable_monthly={enable_monthly}")
 
 # COMMAND ----------
-# MAGIC %md ## 6.1 — Liste des tables depuis le manifest du jour
+# MAGIC %md ## 6.1 — Liste des tables depuis le manifest du dernier backup terminé
+# MAGIC
+# MAGIC La référence est le **dernier backup quotidien terminé** (`latest.json`), pas la date du jour :
+# MAGIC le manifest du jour n'existe qu'à la fin du daily, et un monthly lancé avant (ou pendant) le
+# MAGIC daily du 1er ne le trouvait pas. Il parcourait alors tout `incremental/`, en copiant aussi des
+# MAGIC tables supprimées de la source ou en erreur, et un mélange d'états si le daily tournait en même
+# MAGIC temps. Lancé après le daily du 1er, le snapshot reflète le 1er ; lancé avant, le dernier jour
+# MAGIC terminé (en général la veille). Le scan de `incremental/` ne reste qu'en dernier recours.
 
 # COMMAND ----------
-manifest_path      = f"{incremental_root}/_manifests/{backup_date}.json"
-incremental_tables = []
+# >>> REGLES
+def reference_backup(latest, backup_date: str) -> tuple:
+    """(date de référence, origine) : la date du dernier backup terminé d'après latest.json, sinon
+    backup_date. Un latest.json sans date (ancien format, illisible) est ignoré."""
+    ref = (latest or {}).get("date") if isinstance(latest, dict) else None
+    if ref:
+        return ref, "latest.json"
+    return backup_date, "date du jour"
 
-try:
-    entries = json.loads(_uc_head(manifest_path))
+
+def manifest_tables(entries: list, incremental_root: str) -> list:
+    """Chemins des tables copiées avec succès dans un manifest de clone."""
+    tables = []
     for e in entries:
         if e.get("status") == "success":
             parts = e["table"].split(".")
             if len(parts) == 3:
-                incremental_tables.append(f"{incremental_root}/{parts[0]}/{parts[1]}/{parts[2]}")
-    print(f"[OK] {len(incremental_tables)} tables lues depuis le manifest")
+                tables.append(f"{incremental_root}/{parts[0]}/{parts[1]}/{parts[2]}")
+    return tables
+# <<< REGLES
+
+try:
+    latest = json.loads(_uc_head(f"{backup_root}/latest.json"))
 except Exception as e:
-    print(f"[WARN] Manifest non disponible ({e}) — scan du répertoire incremental/")
+    latest = None
+    print(f"[WARN] latest.json non lisible ({e}) — référence : date du jour")
+reference_date, reference_origin = reference_backup(latest, backup_date)
+if reference_date != backup_date:
+    print(f"[INFO] Référence : backup du {reference_date} ({reference_origin}), dernier terminé — "
+          f"le daily du {backup_date} n'est pas (encore) terminé")
+else:
+    print(f"[INFO] Référence : backup du {reference_date} ({reference_origin})")
+if latest and latest.get("status") not in (None, "success"):
+    print(f"[WARN] Le backup de référence s'est terminé en statut « {latest.get('status')} » : "
+          "les tables en erreur ce jour-là ne sont pas dans le snapshot")
+
+manifest_path      = f"{incremental_root}/_manifests/{reference_date}.json"
+incremental_tables = []
+
+try:
+    incremental_tables = manifest_tables(json.loads(_uc_head(manifest_path)), incremental_root)
+    print(f"[OK] {len(incremental_tables)} tables lues depuis le manifest du {reference_date}")
+except Exception as e:
+    print(f"[WARN] Manifest non disponible ({e}) — scan du répertoire incremental/ (dernier recours : "
+          "peut inclure des tables supprimées de la source ou en erreur au dernier backup)")
     try:
         for cat in [f.path for f in dbutils.fs.ls(incremental_root) if not f.name.startswith("_")]:
             for sch in [f.path for f in dbutils.fs.ls(cat) if not f.name.startswith("_")]:

@@ -2,8 +2,8 @@
 
 Synthèse des corrections ; le détail est dans `DR_Backup_Notes_de_Version_v4.2.docx` (§ indiqués).
 Validé par un test aller-retour complet (backup → sinistre → restauration) sur KeyIT dev le
-2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 243 tests automatisés. Les correctifs
-§ 2.20 et 2.21 (droits hérités des groupes, dernier backup prioritaire — 2026-10-27 et 2026-10-29) sont couverts par les tests, pas encore par un run réel.
+2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 247 tests automatisés. Les correctifs
+§ 2.20 à 2.22 (droits hérités des groupes, dernier backup prioritaire, mensuel sur le dernier backup terminé — 2026-10-27 et 2026-10-29) sont couverts par les tests, pas encore par un run réel.
 
 ## Pertes de données silencieuses
 
@@ -38,6 +38,7 @@ Validé par un test aller-retour complet (backup → sinistre → restauration) 
 | 2.5 | Point de reprise écrit moins souvent (allège le driver). |
 | 2.2 | Catalogues fédérés et Delta Sharing exclus (définition relevant de l'IaC). |
 | 2.3 | Traces Java retirées des messages (elles tronquaient la sortie des notebooks). |
+| 2.22 | **Snapshot mensuel lancé avant la fin du daily** : le manifest du jour n'existait pas encore, le mensuel parcourait tout `incremental/` (tables supprimées ou en erreur copiées, mélange d'états si le daily tournait). Référence désormais le dernier backup terminé (`latest.json`). |
 | 2.20 | **`dr-backup-grants-sync` ignorait les droits hérités des groupes** : il les signalait manquants et, en mode apply, les aurait ré-accordés directement au compte de backup. Groupes lus par l'API SCIM du compte, imbrication comprise ; apply interrompu si les groupes sont illisibles. |
 
 ## Rapport de couverture (`diag_03_backup_coverage`)

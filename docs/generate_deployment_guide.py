@@ -1095,7 +1095,7 @@ add_table(
     ["Niveau", "Mécanisme", "Rétention par défaut", "Restauration possible"],
     [
         ["Quotidien", "Historique Delta de incremental/", "30 jours", "N'importe quel instant des 30 derniers jours"],
-        ["Mensuel", "DEEP CLONE vers snapshots/monthly/", "3 mois", "État du 1er du mois concerné"],
+        ["Mensuel", "DEEP CLONE vers snapshots/monthly/", "3 mois", "État du dernier backup quotidien terminé au lancement (le 1er du mois s'il est lancé après le daily)"],
     ],
     col_widths=[3, 4.5, 3.5, 5],
 )
@@ -1293,6 +1293,15 @@ add_table(
         ["dr-backup-coverage-report", "Le 1er de chaque mois à 06:00 UTC", "1 heure"],
     ],
     col_widths=[4.5, 7, 4.5],
+)
+
+doc.add_paragraph(
+    "Le mensuel et le rapport de couverture s'appuient sur le dernier backup quotidien terminé "
+    "(latest.json, mis à jour à la fin du daily), jamais sur la date du jour. Lancés après la fin du daily "
+    "du 1er, ils reflètent l'état du 1er ; lancés avant, ou pendant le daily, ils reflètent le dernier "
+    "jour terminé, en général la veille, et le disent dans leur sortie. En lancement manuel, l'ordre "
+    "recommandé est donc : daily, attendre sa fin, puis mensuel ou rapport de couverture. Un daily qui "
+    "dure plus d'une heure déborde sur l'horaire planifié du mensuel : décaler le mensuel si c'est le cas."
 )
 
 add_heading(doc, "Synchronisation automatique des droits (dr-backup-grants-sync)", 3)

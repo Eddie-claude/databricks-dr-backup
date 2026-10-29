@@ -405,6 +405,22 @@ doc.add_paragraph(
     "un avertissement signale un backup de plus de 2 jours. Lancer le rapport après la fin du daily."
 )
 
+add_heading(doc, "2.22 Snapshot mensuel lancé avant la fin du daily", 2)
+
+doc.add_paragraph(
+    "Le job dr-backup-monthly cherchait le manifest à la date du jour. Ce fichier n'est écrit qu'à la fin "
+    "du daily du même jour : lancé avant, ou pendant le daily du 1er (cas client : daily à 01:00, mensuel à "
+    "02:00, daily de plus d'une heure), le mensuel ne le trouvait pas (« Manifest non disponible ») et "
+    "parcourait tout incremental/. Il copiait alors aussi des tables supprimées de la source ou en erreur "
+    "au dernier daily, et, si le daily tournait en même temps, un mélange de tables à l'état de la veille "
+    "et du jour. Le mensuel s'appuie désormais sur latest.json, c'est-à-dire sur le dernier backup "
+    "quotidien terminé, et copie les tables marquées « success » dans son manifest ; sa sortie indique la "
+    "date de référence (« backup du 2026-08-31, dernier terminé »). Le parcours de incremental/ ne reste "
+    "qu'en dernier recours, si latest.json lui-même est illisible. Un snapshot mensuel antérieur à cette "
+    "correction et produit avec le message « Manifest non disponible » peut contenir des tables en trop ; "
+    "il reste restaurable table par table."
+)
+
 doc.add_page_break()
 
 
