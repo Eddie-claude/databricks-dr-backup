@@ -390,6 +390,21 @@ doc.add_paragraph(
     "est propriétaire est accessible. Le rapport liste ces groupes dans son en-tête."
 )
 
+add_heading(doc, "2.21 Rapport de couverture : le dernier backup réel prime sur les droits", 2)
+
+doc.add_paragraph(
+    "Le rapport de couverture lisait le manifest du dernier backup, mais le verdict d'une table était "
+    "d'abord décidé par le calcul des droits du compte de backup. Ce calcul reste théorique (il ne voit pas "
+    "un droit hérité d'un MANAGE ou d'un propriétaire parent) : une table copiée avec succès la veille pouvait "
+    "ressortir « inaccessible ». Pour les tables, le manifest fait désormais foi : copiée avec succès → "
+    "sauvegardée ; en erreur → échec ; absente du manifest mais créée après ce backup → nouveau verdict "
+    "« Nouvelle table », rien à traiter ; absente sans autre explication → « Couvert mais inaccessible » si "
+    "les droits l'expliquent, sinon nouveau verdict « Absente du dernier backup ». Les vues, volumes, fonctions, "
+    "schémas et catalogs ne figurent pas dans le manifest : pour eux, seul le calcul des droits est disponible, "
+    "le rapport le rappelle. L'en-tête indique la date, le statut et l'heure d'écriture du backup de référence ; "
+    "un avertissement signale un backup de plus de 2 jours. Lancer le rapport après la fin du daily."
+)
+
 doc.add_page_break()
 
 

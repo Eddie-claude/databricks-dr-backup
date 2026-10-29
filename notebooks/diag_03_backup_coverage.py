@@ -112,13 +112,15 @@ VERDICTS = {  # code: (pastille, libellé, couleur, ordre d'affichage)
     "OK":           ("✅", "Sauvegardé et restaurable",           "#1a7f37", 1),
     "AS_CODE":      ("🔵", "As code (IaC)",                        "#1f6feb", 2),
     "AUTRE":        ("⚪", "Autre moyen",                          "#6e7781", 3),
-    "PARTIEL":      ("🟡", "Partiel",                              "#bf8700", 4),
-    "INACCESSIBLE": ("🔴", "Couvert mais inaccessible au backup",  "#cf222e", 5),
-    "ECHEC":        ("🔴", "Échec au dernier backup",              "#cf222e", 6),
-    "NON_COUVERT":  ("🔴", "Non couvert",                          "#cf222e", 7),
-    "EXCLU":        ("⚫", "Exclu volontairement",                 "#24292f", 8),
+    "NOUVEAU":      ("⚪", "Nouvelle table (après le dernier backup)", "#6e7781", 4),
+    "PARTIEL":      ("🟡", "Partiel",                              "#bf8700", 5),
+    "INACCESSIBLE": ("🔴", "Couvert mais inaccessible au backup",  "#cf222e", 6),
+    "ECHEC":        ("🔴", "Échec au dernier backup",              "#cf222e", 7),
+    "ABSENT":       ("🔴", "Absente du dernier backup",            "#cf222e", 8),
+    "NON_COUVERT":  ("🔴", "Non couvert",                          "#cf222e", 9),
+    "EXCLU":        ("⚫", "Exclu volontairement",                 "#24292f", 10),
 }
-TO_TREAT = {"PARTIEL", "INACCESSIBLE", "ECHEC", "NON_COUVERT"}
+TO_TREAT = {"PARTIEL", "INACCESSIBLE", "ECHEC", "ABSENT", "NON_COUVERT"}
 
 # Nombre de niveaux sous /Shared exportés par 05_workspace_config (list_workspace_recursive, max_depth=4)
 SHARED_EXPORT_DEPTH = 5
@@ -306,15 +308,26 @@ def verdict(def_cov: str, data_cov: str, excluded: bool = False, accessible=None
         return "EXCLU"
     if def_cov == "NONE":
         return "NON_COUVERT"
+    # Pour des données clonées, le dernier backup réel prime sur le calcul des droits, qui reste
+    # théorique (droits hérités d'un MANAGE, d'un propriétaire parent… qu'il ne voit pas) :
+    #   success          → l'accès est prouvé, quel que soit le calcul
+    #   error / skipped  → échec (une vue envoyée au clone en v4.1 n'est pas concernée : data_cov NA)
+    #   absent           → table connue avant le backup mais non copiée ; les droits donnent la cause
+    #   new              → table créée après le backup : copiée au prochain, rien à traiter
+    if data_cov == "SCRIPT" and last_status:
+        if last_status == "success":
+            accessible = True
+        elif last_status in ("error", "skipped"):
+            return "ECHEC"
+        elif last_status == "absent" and accessible is not False:
+            return "ABSENT"
+        elif last_status == "new" and accessible is not False:
+            return "NOUVEAU"
     if accessible is False and "SCRIPT" in (def_cov, data_cov):
         # Le script ne peut pas le lire ; l'IaC recrée la définition, mais pas des données
         if not iac or data_cov == "SCRIPT":
             return "INACCESSIBLE"
         def_cov = "IAC"
-    # Un échec ou un « skipped » au clone ne compte que pour des données clonées : une vue envoyée
-    # au clone (v4.1) y échouait sans conséquence, sa DDL étant exportée à part
-    if last_status in ("error", "skipped") and data_cov == "SCRIPT":
-        return "ECHEC"
     if data_cov == "NONE":
         return "PARTIEL"
     if "OTHER" in (def_cov, data_cov):
@@ -340,17 +353,27 @@ if iac_file:
 def _read_text(path: str) -> str:
     return spark.read.text(path, wholetext=True).collect()[0][0]
 
-last_status_by_table, last_backup_date = {}, None
+last_status_by_table, last_backup_date, last_backup_status, last_backup_at = {}, None, None, None
 if backup_root:
     try:
-        last_backup_date = json.loads(_read_text(f"{backup_root}/latest.json"))["date"]
-        print(f"[OK] Dernier backup : {last_backup_date}")
+        latest = json.loads(_read_text(f"{backup_root}/latest.json"))
+        last_backup_date, last_backup_status = latest["date"], latest.get("status")
+        print(f"[OK] Dernier backup : {last_backup_date} ({last_backup_status})")
         if backup_version == "auto":
             names = {f.name for f in dbutils.fs.ls(f"{backup_root}/{last_backup_date}/uc_metadata/")}
             backup_version = "v4.2" if "05_volumes.sql" in names else "v4.1"
-        manifest = json.loads(_read_text(f"{backup_root}/incremental/_manifests/{last_backup_date}.json"))
+        manifest_path = f"{backup_root}/incremental/_manifests/{last_backup_date}.json"
+        manifest = json.loads(_read_text(manifest_path))
         last_status_by_table = {e["table"].lower(): e.get("status") for e in manifest}
-        print(f"[OK] Manifest du dernier backup : {len(last_status_by_table)} tables")
+        # Heure d'écriture du manifest : une table créée après est « nouvelle », pas « absente »
+        try:
+            last_backup_at = datetime.utcfromtimestamp(dbutils.fs.ls(manifest_path)[0].modificationTime / 1000)
+        except Exception:
+            last_backup_at = datetime.fromisoformat(last_backup_date)
+        print(f"[OK] Manifest du dernier backup : {len(last_status_by_table)} tables, écrit le {last_backup_at:%Y-%m-%d %H:%M} UTC")
+        if (run_at - last_backup_at).days >= 2:
+            warn(f"Le dernier backup date du {last_backup_date} : le rapport compare l'inventaire actuel à un "
+                 "backup de plus de 2 jours")
     except Exception as e:
         warn(f"Dernier backup non lisible dans {backup_root} : {_short(e)}")
 
@@ -392,7 +415,7 @@ IS = "system.information_schema"
 schemas   = [r for r in _query("Schémas", f"SELECT * FROM {IS}.schemata WHERE schema_name <> 'information_schema'")
              if _in_scope(r["catalog_name"])]
 tables    = [r for r in _query("Tables / vues", f"SELECT table_catalog, table_schema, table_name, table_type, "
-                               f"data_source_format, table_owner, created_by FROM {IS}.tables "
+                               f"data_source_format, table_owner, created_by, created FROM {IS}.tables "
                                f"WHERE table_schema <> 'information_schema'")
              if _in_scope(r["table_catalog"])]
 volumes   = [r for r in _query("Volumes", f"SELECT * FROM {IS}.volumes WHERE volume_schema <> 'information_schema'")
@@ -572,7 +595,7 @@ TYPE_LABELS = {
 rows = []
 
 def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="", accessible=None, protected=False,
-        last_status=None, note="", def_cov=None, data_cov=None, iac_force=None, explanation=None):
+        last_status=None, created=None, note="", def_cov=None, data_cov=None, iac_force=None, explanation=None):
     d, data, default_explanation = coverage(kind, sub, fmt, backup_version, protected=protected)
     d, data = def_cov or d, data_cov or data
     explanation = explanation or default_explanation
@@ -583,14 +606,12 @@ def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="",
     # Le dernier backup réel prime : une table clonée avec succès a ses données couvertes
     if last_status == "success" and data == "NONE":
         data = "SCRIPT"
+    # Table clonable absente du manifest : nouvelle si créée après ce backup, sinon non copiée
+    if clonable and last_status is None and last_status_by_table:
+        last_status = "new" if created and last_backup_at and created >= last_backup_at else "absent"
     v = verdict(d, data, excluded=(catalog or "").lower() in excluded_catalogs,
                 accessible=accessible, last_status=last_status, iac=bool(iac))
-    if last_status:
-        last_label = last_status
-    elif clonable and last_status_by_table:
-        last_label = "absent"
-    else:
-        last_label = "—"
+    last_label = {"new": "nouvelle", None: "—"}.get(last_status, last_status)
     rows.append({
         "Domaine": domain, "Type": TYPE_LABELS.get(kind, kind), "Sous-type": sub or "",
         "Catalog": catalog or "", "Objet": name, "Propriétaire": owner or "", "Créé par": created_by or "",
@@ -618,7 +639,7 @@ for t in tables:
         owner=t["table_owner"], created_by=t["created_by"],
         accessible=access("TABLE", t["table_catalog"], t["table_schema"], t["table_name"], t["table_owner"]),
         protected=(t["table_catalog"].lower(), t["table_schema"].lower(), t["table_name"].lower()) in protected_tables,
-        last_status=last_status_by_table.get(fqn.lower()))
+        last_status=last_status_by_table.get(fqn.lower()), created=t.get("created"))
 
 for v in volumes:
     add("Metastore", "VOLUME", f"{v['volume_catalog']}.{v['volume_schema']}.{v['volume_name']}",
@@ -832,6 +853,15 @@ if totals.get("INACCESSIBLE"):
     attention.append(f"<b>{totals['INACCESSIBLE']}</b> objet(s) seraient sauvegardés par le script mais le compte "
                      f"de backup <code>{e(backup_principal)}</code> n'a pas les droits nécessaires "
                      "(USE CATALOG, USE SCHEMA, SELECT / READ VOLUME / EXECUTE).")
+if totals.get("ABSENT"):
+    attention.append(f"<b>{totals['ABSENT']}</b> table(s) existaient avant le dernier backup mais n'y figurent pas, "
+                     "sans que le calcul des droits l'explique : vérifier que le compte de backup voit leur "
+                     "catalog et leur schéma (un objet invisible n'est pas listé, donc pas copié).")
+if last_status_by_table:
+    attention.append(f"Pour les tables, le résultat du dernier backup ({e(last_backup_date)}) prime sur le calcul "
+                     "des droits : une table copiée est sauvegardée, même si ses droits ne sont pas visibles. "
+                     "Pour les vues, volumes, fonctions, schémas et catalogs, absents du manifest du clone, seul "
+                     "le calcul des droits est disponible.")
 if not access_checked:
     attention.append("Les droits du compte de backup n'ont pas été vérifiés (paramètre <code>backup_principal</code> vide).")
 attention.append("Les permissions (GRANT) sont sauvegardées pour les catalogs, schémas et tables"
@@ -858,9 +888,11 @@ legend_rows = "".join(f"<tr><td>{v[0]} <b>{e(v[1])}</b></td><td>{e(t)}</td></tr>
     (VERDICTS["OK"], "Définition et données recréées par le script de backup DR."),
     (VERDICTS["AS_CODE"], "Recréé par l'infrastructure as code (Terraform, bundle) : identité créatrice ou liste fournie."),
     (VERDICTS["AUTRE"], "Données hors Databricks (base fédérée, stockage d'un volume externe), dans Git, ou recalculées."),
+    (VERDICTS["NOUVEAU"], "Table créée après le dernier backup : copiée au prochain, rien à traiter."),
     (VERDICTS["PARTIEL"], "Définition sauvegardée mais pas les données (ex. table dans un format non clonable)."),
     (VERDICTS["INACCESSIBLE"], "Le script le sauvegarderait, mais le compte de backup n'a pas les droits."),
     (VERDICTS["ECHEC"], "Prévu par le script mais en erreur lors du dernier backup."),
+    (VERDICTS["ABSENT"], "Table connue avant le dernier backup mais non copiée, sans cause visible dans les droits."),
     (VERDICTS["NON_COUVERT"], "Aucun moyen de restauration identifié."),
     (VERDICTS["EXCLU"], "Catalog exclu volontairement du périmètre."),
 ])
@@ -880,7 +912,7 @@ report_html = f"""<!doctype html><html lang=fr><head><meta charset=utf-8>
 <title>Couverture du backup DR</title><style>{CSS}</style></head><body>
 <h1>Couverture du backup DR — Databricks</h1>
 <div class=meta>Workspace {e(HOST)} · généré le {run_at:%d.%m.%Y %H:%M} par {e(current_user)} ·
-règles du backup <b>{e(backup_version)}</b>{f" · dernier backup {e(last_backup_date)}" if last_backup_date else ""}
+règles du backup <b>{e(backup_version)}</b>{f" · dernier backup <b>{e(last_backup_date)}</b> ({e(last_backup_status or '?')}, manifest écrit le {last_backup_at:%d.%m.%Y %H:%M} UTC)" if last_backup_at else (f" · dernier backup {e(last_backup_date)}" if last_backup_date else "")}
 {f" · compte de backup <code>{e(backup_principal)}</code>" if backup_principal else ""}
 {f" et ses {len(backup_groups)} groupe(s) : " + ", ".join(f"<code>{e(g)}</code>" for g in backup_groups) if backup_groups else ""}</div>
 <div class=kpis><div class=kpi><b>{len(df)}</b><span>objets inventoriés</span></div>{kpis}</div>

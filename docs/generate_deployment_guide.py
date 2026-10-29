@@ -569,13 +569,25 @@ add_table(
         ["✅ Sauvegardé et restaurable", "Définition et données couvertes par le backup", "Aucune"],
         ["🔵 As code (IaC)", "Recréé par Terraform ou le bundle", "Vérifier que l'IaC est à jour"],
         ["⚪ Autre moyen", "Couvert hors backup : Git, recalcul d'un pipeline, données dans la source", "Documenter le moyen au plan de reprise"],
+        ["⚪ Nouvelle table", "Créée après le dernier backup : copiée au prochain", "Aucune"],
         ["🟡 Partiel", "Définition couverte, données non (format non clonable, table protégée)", "Plan de reconstruction (§9.3)"],
         ["🔴 Couvert mais inaccessible au backup", "Prévu par le script, mais le compte de backup n'a pas les droits", "Accorder les droits (§2.5, job dr-backup-grants-sync)"],
-        ["🔴 Échec au dernier backup", "Table en erreur ou non copiée au dernier backup", "Lire la cause dans le rapport du backup du jour"],
+        ["🔴 Échec au dernier backup", "Table en erreur au dernier backup", "Lire la cause dans le rapport du backup du jour"],
+        ["🔴 Absente du dernier backup", "Table connue avant le dernier backup mais non copiée, sans cause visible dans les droits", "Vérifier que le compte de backup voit son catalog et son schéma"],
         ["🔴 Non couvert", "Ni le backup ni l'IaC ne le recréent", "Le couvrir en IaC, ou accepter le risque"],
         ["⚫ Exclu volontairement", "Catalog listé dans excluded_catalogs", "Aucune"],
     ],
     col_widths=[4.5, 6.5, 5],
+)
+
+doc.add_paragraph(
+    "Pour les tables, le résultat du dernier backup (manifest du daily indiqué par latest.json) prime sur le "
+    "calcul des droits : une table copiée avec succès est sauvegardée, même si le calcul ne retrouve pas ses "
+    "droits (hérités d'un MANAGE, d'un propriétaire parent…). Les vues, volumes, fonctions, schémas et catalogs "
+    "ne figurent pas dans ce manifest : pour eux, seul le calcul des droits est disponible. Lancer le rapport "
+    "après la fin du daily pour qu'il s'appuie sur le backup du jour ; lancé pendant un daily, il s'appuie sur "
+    "le précédent. L'en-tête indique la date et le statut du backup de référence ; un avertissement signale un "
+    "backup de plus de 2 jours."
 )
 
 add_heading(doc, "3.5 Visibilité des tables protégées pour le compte de backup", 2)

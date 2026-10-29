@@ -2,8 +2,8 @@
 
 Synthèse des corrections ; le détail est dans `DR_Backup_Notes_de_Version_v4.2.docx` (§ indiqués).
 Validé par un test aller-retour complet (backup → sinistre → restauration) sur KeyIT dev le
-2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 230 tests automatisés. Le correctif
-§ 2.20 (droits hérités des groupes, 2026-10-27) est couvert par les tests, pas encore par un run réel.
+2026-10-07, rejoué le 2026-10-09 avec les derniers correctifs, et par 243 tests automatisés. Les correctifs
+§ 2.20 et 2.21 (droits hérités des groupes, dernier backup prioritaire — 2026-10-27 et 2026-10-29) sont couverts par les tests, pas encore par un run réel.
 
 ## Pertes de données silencieuses
 
@@ -47,8 +47,10 @@ Règles alignées sur la v4.2 corrigée : jobs (tâches et permissions), pipelin
 colonnes signalées « données non sauvegardées » ; une vue en erreur au clone n'est plus comptée comme
 un échec ; alerte si le compte de backup n'a pas `USE CATALOG` sur `system`. Droits du compte de
 backup lus **avec ceux de tous ses groupes**, imbrication comprise (§ 2.20, retour du test datalab) :
-sans cela, des objets accessibles via des groupes de privilèges apparaissaient « inaccessibles ». Les règles v4.1 restent
-appliquées à un backup v4.1 (jobs sans tâches, seul `/Shared` exporté…).
+sans cela, des objets accessibles via des groupes de privilèges apparaissaient « inaccessibles ». Pour les
+tables, **le résultat du dernier backup prime sur le calcul des droits** (§ 2.21, même retour) : une table
+copiée est sauvegardée ; absente du manifest, elle est « nouvelle » (créée après le backup) ou « absente du
+dernier backup ». Les règles v4.1 restent appliquées à un backup v4.1 (jobs sans tâches, seul `/Shared` exporté…).
 
 Job `dr-backup-coverage-report` (livré en pause, le 1er du mois à 06:00 UTC) : produit le rapport
 chaque mois dans `coverage_output_dir`, avec l'identité admin qui déploie le bundle. Vérifié sur

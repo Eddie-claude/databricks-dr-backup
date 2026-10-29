@@ -165,6 +165,37 @@ def test_verdict(kwargs, expected):
     assert R["verdict"](**kwargs) == expected
 
 
+# ── Le dernier backup réel prime sur le calcul des droits (retour client datalab) ──
+
+@pytest.mark.parametrize("kwargs,expected", [
+    # table copiée la veille : sauvegardée, même si le calcul des droits (théorique) ne voit rien
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=False, last_status="success"), "OK"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=None, last_status="success"), "OK"),
+    # en erreur au clone : échec, que les droits soient visibles ou non
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=False, last_status="error"), "ECHEC"),
+    # absente du manifest : les droits donnent la cause quand ils la voient, sinon « absente »
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=False, last_status="absent"), "INACCESSIBLE"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=True, last_status="absent"), "ABSENT"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=None, last_status="absent"), "ABSENT"),
+    # créée après le backup : rien à traiter, sauf si le backup ne pourra pas la lire
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=True, last_status="new"), "NOUVEAU"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=False, last_status="new"), "INACCESSIBLE"),
+    # objets sans données clonées (vue, fonction) : le manifest ne les concerne pas, droits seuls
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=False, last_status="absent"), "INACCESSIBLE"),
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=True, last_status="absent"), "OK"),
+    # table protégée (données non clonables) absente du manifest : reste « partiel », pas « absente »
+    (dict(def_cov="SCRIPT", data_cov="NONE", accessible=True, last_status="absent"), "PARTIEL"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", excluded=True, last_status="absent"), "EXCLU"),
+])
+def test_last_backup_overrides_rights_for_tables(kwargs, expected):
+    assert R["verdict"](**kwargs) == expected
+
+
+def test_new_verdicts_are_classified():
+    assert "ABSENT" in R["TO_TREAT"] and "NOUVEAU" not in R["TO_TREAT"]
+    assert R["VERDICTS"]["ABSENT"][0] == "🔴" and R["VERDICTS"]["NOUVEAU"][0] == "⚪"
+
+
 # ── Cas relevés à l'exécution simulée ────────────────────────────────────
 
 def test_browse_is_enough_for_volume_and_function_definitions():
