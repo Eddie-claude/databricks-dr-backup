@@ -1,0 +1,36 @@
+flowchart LR
+    GS(["dr-backup-grants-sync<br/>00:30 UTC<br/>droits du compte de backup"]) -.-> START
+    START([Job daily<br/>01:00 UTC]) --> S1
+
+    subgraph CRITICAL ["Phase critique - un echec arrete le job"]
+        direction LR
+        S1["<b>01 UC Metadata</b><br/>DDL catalogues, schemas, tables,<br/>volumes, fonctions + grants<br/>tables FOREIGN ignorees"] --> S2["<b>02 Data Clone</b><br/>DEEP CLONE incremental<br/>tables Delta<br/>cause d'echec par table"]
+    end
+
+    S2 --> S2B
+
+    subgraph NONCRIT ["Phase non critique - un echec degrade le statut"]
+        direction LR
+        S2B["<b>14 Volume Files</b><br/>Fichiers des volumes manages<br/>copie des fichiers modifies"] --> S3["<b>05 Workspace</b><br/>Notebooks, fichiers, dashboards<br/>jobs, pipelines, repos, ACLs<br/>controle admin du workspace"]
+        S3 --> MAN["<b>Manifeste</b><br/>manifest.json"]
+        MAN --> S4["<b>03 Diff</b><br/>Compare J / J-1"]
+        S4 --> S5["<b>04 Rapport</b><br/>HTML de synthese<br/>+ top 20 volumes copies"]
+    end
+
+    S5 --> R1
+
+    subgraph RET ["06 Retention"]
+        direction LR
+        R1["Purge daily<br/>plus de 30 jours"] --> R2["Purge legacy<br/>weekly"]
+        R2 --> R3{"Jour du<br/>VACUUM ?<br/>dimanche"}
+        R3 -- Oui --> R4["VACUUM<br/>tables incremental/"]
+        R3 -- Non --> R5["Reporte"]
+    end
+
+    R4 --> FIN
+    R5 --> FIN
+    FIN["latest.json<br/>date + statut"] --> END([Fin])
+
+    style CRITICAL fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style NONCRIT fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style RET fill:#fce4ec,stroke:#c62828,stroke-width:1px

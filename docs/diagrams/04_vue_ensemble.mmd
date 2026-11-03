@@ -1,0 +1,52 @@
+flowchart TB
+    subgraph WS ["Workspace Databricks - production"]
+        UC["Unity Catalog<br/>catalogues, schemas, tables,<br/>volumes, fonctions"]
+        VOL["Fichiers des<br/>volumes manages"]
+        JOBS["Notebooks, jobs,<br/>pipelines, repos"]
+        PERMS["Permissions<br/>grants UC + ACLs workspace"]
+    end
+
+    UC -->|"DEEP CLONE<br/>quotidien"| INC[(ADLS: incremental/)]
+    UC -->|"DDL"| DATED[(ADLS: backup/YYYY-MM-DD/)]
+    VOL -->|"copie des fichiers<br/>modifies"| VOLS[(ADLS: volumes/)]
+    JOBS -->|"Export JSON<br/>+ contenu brut"| DATED
+    PERMS -->|"Export DDL<br/>+ JSON"| DATED
+
+    INC -->|"DEEP CLONE<br/>1er du mois"| MONTHLY[(ADLS: snapshots/monthly/)]
+
+    subgraph RET ["Retention"]
+        direction LR
+        R1["Daily: 30 jours"]
+        R2["Monthly: 3 mois"]
+        R3["VACUUM: hebdomadaire"]
+    end
+
+    DATED -.->|"purge"| R1
+    VOLS -.->|"purge"| R1
+    MONTHLY -.->|"purge"| R2
+    INC -.->|"nettoyage Delta"| R3
+
+    subgraph DR ["Restauration DR"]
+        direction LR
+        REST_T["Tables"]
+        REST_U["Objets UC +<br/>fichiers des volumes"]
+        REST_W["Notebooks, jobs,<br/>pipelines"]
+        REST_G["Grants + ACLs"]
+    end
+
+    INC -->|"restore"| REST_T
+    MONTHLY -->|"restore"| REST_T
+    DATED -->|"restore"| REST_U
+    VOLS -->|"restore"| REST_U
+    DATED -->|"restore"| REST_W
+    DATED -->|"restore"| REST_G
+
+    REST_T -->|"vers nouveau<br/>workspace"| WS2["Workspace DR"]
+    REST_U --> WS2
+    REST_W --> WS2
+    REST_G --> WS2
+
+    style WS fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style RET fill:#fce4ec,stroke:#c62828,stroke-width:1px
+    style DR fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style WS2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px

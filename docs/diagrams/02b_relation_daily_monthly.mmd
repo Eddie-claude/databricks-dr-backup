@@ -1,0 +1,33 @@
+flowchart LR
+    subgraph GS ["Job grants-sync - 00:30 UTC"]
+        G1["Droits du compte de backup<br/>report ou apply"]
+    end
+
+    subgraph DAILY ["Job daily - 01:00 UTC"]
+        D1["DEEP CLONE incremental"]
+        D2["Volumes, workspace,<br/>manifeste, diff, rapport"]
+        D3["Retention daily + VACUUM"]
+    end
+
+    subgraph MONTHLY ["Job monthly - 1er du mois 02:00 UTC"]
+        M1["DEEP CLONE snapshot mensuel"]
+        M2["Purge anciens snapshots"]
+    end
+
+    subgraph COV ["Job coverage-report - 1er du mois 06:00 UTC"]
+        C1["Couverture reelle<br/>d'apres le contenu du backup"]
+    end
+
+    G1 -.->|"droits verifies<br/>avant le backup"| D1
+    D1 -->|"Tables Delta<br/>mises a jour"| SRC[(incremental/)]
+    D3 -->|"dernier backup<br/>termine"| LAT[(latest.json)]
+    LAT -->|"date de<br/>reference"| M1
+    SRC -->|"Source du<br/>snapshot"| M1
+    M1 --> DST[(snapshots/monthly/<br/>YYYY-MM/)]
+    SRC --> C1
+    DST --> C1
+
+    style GS fill:#fff9c4,stroke:#f9a825
+    style DAILY fill:#e8f5e9,stroke:#2e7d32
+    style MONTHLY fill:#e3f2fd,stroke:#1565c0
+    style COV fill:#f3e5f5,stroke:#7b1fa2

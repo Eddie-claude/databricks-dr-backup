@@ -113,6 +113,8 @@ add_table(
          "Le compte de backup doit être admin du workspace pour voir repos, jobs, pipelines et dossiers (§2.26)"],
         ["Le rapport du daily liste les plus gros volumes copiés, avec la part de la table recopiée",
          "Repère les tables réécrites entièrement chaque jour (§2.28)"],
+        ["Les étapes report et retention apparaissent dans le rapport du daily, « en cours » / « à venir »",
+         "Leur statut final est dans latest.json (§2.29)"],
         ["Le rapport de couverture passe en vert les vues, volumes, fonctions, jobs, pipelines présents dans le backup",
          "Le contenu du dernier backup prime sur le calcul des droits pour tous les objets (§2.23)"],
     ],
@@ -494,6 +496,29 @@ doc.add_paragraph(
     "de tables. Le manifest du clone garde désormais la taille totale de chaque table (table_size_gb) et le "
     "rapport du daily liste les 20 plus gros volumes copiés avec la part de la table recopiée. Rappel : le premier "
     "daily après la mise à jour v4.2 recopie toutes les tables une fois (§2.13)."
+)
+
+doc.add_paragraph(
+    "Vérifié sur l'environnement de test : une table rechargée par INSERT OVERWRITE est recopiée à 100 % ; "
+    "100 lignes ajoutées à une table de même taille ne recopient que quelques petits fichiers (≈ 0 GB) ; les "
+    "tables inchangées sont sautées sans DEEP CLONE."
+)
+
+add_heading(doc, "2.29 Tableau des étapes du rapport du daily", 2)
+
+doc.add_paragraph(
+    "Le rapport est généré pendant sa propre étape, avant la rétention : son tableau des étapes s'arrêtait à "
+    "« diff », comme si le rapport et la rétention n'avaient pas tourné. Ces deux étapes y figurent désormais, "
+    "marquées « en cours » et « à venir » ; leur statut final est dans latest.json, écrit à la fin du daily."
+)
+
+add_heading(doc, "2.30 Rapport de couverture : tables protégées hors périmètre", 2)
+
+doc.add_paragraph(
+    "Le point d'attention « N table(s) protégée(s) par un filtre de lignes ou un masque de colonnes » comptait "
+    "aussi les tables du catalog system, qui porte ses propres masques (system.access.audit, "
+    "system.query.history) : il signalait des tables non sauvegardées alors que toutes les tables du périmètre "
+    "l'étaient. Il ne compte plus que les tables des catalogs du périmètre, comme le reste du rapport."
 )
 
 doc.add_page_break()

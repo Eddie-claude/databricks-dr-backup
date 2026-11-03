@@ -1,0 +1,17 @@
+flowchart TD
+    START([Job monthly<br/>02:00 UTC le 1er du mois]) --> CHECK{"Jour = 1er du mois<br/>OU force_snapshot ?"}
+    CHECK -- Non --> SKIP([Rien a faire])
+    CHECK -- Oui --> S0
+
+    subgraph SNAP ["06 Retention - snapshot mensuel"]
+        direction TB
+        S0["<b>Backup de reference</b><br/>Dernier backup daily termine d'apres latest.json<br/>pas la date du jour<br/>avertissement si son statut n'est pas success"]
+        S0 --> S1["<b>Chargement du manifeste</b><br/>incremental/_manifests/date-de-reference.json<br/>liste des tables"]
+        S1 --> S2["<b>DEEP CLONE complet</b><br/>Copie independante de chaque table<br/>depuis incremental/ vers<br/>snapshots/monthly/YYYY-MM/catalog/schema/table/<br/>parallelise x max_parallel"]
+        S2 --> S3["<b>Purge des snapshots expires</b><br/>Conservation des N derniers mois<br/>retain_monthly, defaut = 3"]
+    end
+
+    S3 --> COV(["dr-backup-coverage-report<br/>06:00 UTC le 1er du mois<br/>rapport de couverture HTML + Excel"])
+    COV --> END([Fin])
+
+    style SNAP fill:#e3f2fd,stroke:#1565c0,stroke-width:2px

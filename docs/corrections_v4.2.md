@@ -71,7 +71,12 @@ KeyIT dev (run en succès, rapport HTML + Excel écrit).
   avertissement `DATA_SOURCE_NOT_FOUND`.
 - **« N tables et M vues exportées »** dans `01` (§ 2.27).
 - **Plus gros volumes copiés** (§ 2.28) : le rapport du daily liste les 20 tables au plus gros volume copié,
-  avec la part de la table recopiée ; le manifest du clone garde la taille de chaque table.
+  avec la part de la table recopiée ; le manifest du clone garde la taille de chaque table. Vérifié sur
+  KeyIT dev : table rechargée par INSERT OVERWRITE recopiée à 100 %, ajout de 100 lignes ≈ 0 GB.
+- **Tableau des étapes du rapport du daily** (§ 2.29) : `report` et `retention` y figurent, « en cours » /
+  « à venir » ; statut final dans `latest.json`.
+- **Tables protégées du rapport de couverture** (§ 2.30) : seules celles du périmètre sont comptées (le
+  catalog `system` porte ses propres masques et déclenchait une fausse alerte).
 
 ## Contrôle des tables protégées (`diag_04_protected_tables`)
 

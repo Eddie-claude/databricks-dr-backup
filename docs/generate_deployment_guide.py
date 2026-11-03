@@ -555,7 +555,7 @@ add_heading(doc, "Lire le rapport", 3)
 
 doc.add_paragraph(
     "L'en-tête indique les règles appliquées (« règles du backup v4.2 · dernier backup … ») puis les "
-    "points d'attention : version, objets inaccessibles au compte de backup, tables protégées, droit "
+    "points d'attention : version, objets inaccessibles au compte de backup, tables protégées du périmètre, droit "
     "manquant sur le catalog system. Viennent ensuite une synthèse par type et par catalog, puis le "
     "détail objet par objet (onglet de détail de l'Excel), dont voici les colonnes :"
 )
@@ -754,7 +754,7 @@ add_warning(
     doc,
     "les champs à renseigner dépendent du type de Service Principal choisi au §2.6. Un secret "
     "Microsoft Entra ID placé dans les champs client_id / client_secret produit une erreur 401 "
-    "à l'authentification. Voir Annexe A.7.",
+    "à l'authentification. Voir Annexe A.8.",
 )
 
 add_heading(doc, "Variante A — Service Principal géré par Databricks (§2.6, option 1)", 3)
@@ -1689,14 +1689,40 @@ bullet(doc, "Table protégée par un filtre de lignes ou un masque de colonnes :
 bullet(doc, "Catalog auquel le principal du job n'a pas accès en lecture")
 bullet(doc, "Catalog exclu par conception (hive_metastore, system, samples) ou schéma information_schema")
 bullet(doc, "Catalog fédéré ou Delta Sharing : exclu par conception, signalé par une ligne [SKIP] dans 01_uc_metadata")
+bullet(doc, "Table étrangère ou index AI Search (type FOREIGN) : définition liée à une connexion ou un endpoint, "
+            "signalée par une ligne [SKIP] dans 01_uc_metadata ; à recréer en IaC")
 
 doc.add_paragraph(
-    "Le point 3 est le seul réellement problématique et le seul silencieux. C'est la raison "
-    "pour laquelle le point 1 de la validation du §7 consiste à recouper le nombre de tables "
-    "sauvegardées avec celui relevé lors de l'audit."
+    "Le catalog sans accès en lecture est le seul cas réellement problématique et le seul silencieux. "
+    "C'est la raison pour laquelle le point 1 de la validation du §7 consiste à recouper le nombre "
+    "de tables sauvegardées avec celui relevé lors de l'audit."
 )
 
-add_heading(doc, "A.7 Erreur 401 à l'authentification du Service Principal", 2)
+doc.add_paragraph(
+    "Pour une table en erreur, la colonne « Cause » nomme en clair les cas fréquents, avant le message "
+    "Spark : « droits insuffisants du compte de backup sur la table » (SELECT, USE SCHEMA, USE CATALOG "
+    "à accorder) et « table introuvable » (table supprimée pendant le backup, ou invisible au compte "
+    "de backup)."
+)
+
+add_heading(doc, "A.7 Volume copié élevé pour peu de tables modifiées", 2)
+
+doc.add_paragraph(
+    "Le volume affiché par 02_data_clone et par le rapport du jour est celui réellement copié, pas la "
+    "taille des tables. Une table dont la version n'a pas changé depuis la veille est sautée sans DEEP "
+    "CLONE ; une table modifiée ne recopie que ses nouveaux fichiers. Delta ne modifie jamais un fichier "
+    "existant : une table rechargée chaque jour (INSERT OVERWRITE, CREATE OR REPLACE, full refresh), un "
+    "MERGE large ou un OPTIMIZE réécrivent une grande partie de ses fichiers, que le backup recopie."
+)
+
+doc.add_paragraph(
+    "La section « Plus gros volumes copiés » du rapport du jour liste les 20 tables au plus gros volume "
+    "copié, avec la part de la table recopiée. Une part proche de 100 % chaque jour désigne une table "
+    "réécrite entièrement : c'est normal pour le backup, le levier éventuel est dans son alimentation "
+    "(chargement incrémental plutôt que rechargement complet)."
+)
+
+add_heading(doc, "A.8 Erreur 401 à l'authentification du Service Principal", 2)
 
 add_code(doc, "Error: 401 Unauthorized")
 
