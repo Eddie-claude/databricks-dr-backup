@@ -103,3 +103,18 @@ def test_top_copied_ranks_by_copied_volume_with_share_of_table():
     assert len(top_copied([{"table": f"t{i}", "status": "success", "size_gb": i + 1} for i in range(30)])) == 20
     html = generate_report(diff=_DIFF, stats={"total_tables": 3}, steps=[], top=top)
     assert "Plus gros volumes copiés" in html and "95 %" in html and "c.s.rewritten" in html
+
+
+def test_report_lists_steps_after_report_as_pending():
+    # Le rapport est généré pendant sa propre étape, avant la rétention : ces deux étapes
+    # manquaient au tableau, comme si elles n'avaient pas tourné
+    steps = [{"name": "diff", "status": "success", "duration_s": 21}]
+    html = generate_report(diff=_DIFF, stats={"total_tables": 2}, steps=steps)
+    assert "<td>report</td>" in html and "en cours" in html
+    assert "<td>retention</td>" in html and "à venir" in html
+    assert "statut final dans latest.json" in html
+
+
+def test_report_without_steps_adds_no_pending_step():
+    html = generate_report(diff=_DIFF, stats={"total_tables": 2}, steps=[])
+    assert "<td>retention</td>" not in html

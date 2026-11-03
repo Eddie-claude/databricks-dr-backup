@@ -33,6 +33,23 @@ def top_copied(clone_manifest: List[Dict[str, Any]], n: int = 20) -> List[Dict[s
     return sorted(rows, key=lambda x: -x["copied_gb"])[:n]
 
 
+# Étapes de l'orchestrateur postérieures à la génération du rapport : sans elles, le tableau des
+# étapes s'arrêtait à « diff » et laissait croire que le rapport et la rétention n'avaient pas tourné
+STEPS_AFTER_REPORT = (("report", "en cours"), ("retention", "à venir"))
+
+
+def with_later_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ajoute au tableau les étapes que le rapport ne peut pas encore connaître (lui-même, puis la
+    rétention), marquées comme telles ; leur statut final est dans latest.json. Sans étape transmise
+    (04_report lancé seul), rien n'est ajouté."""
+    if not steps:
+        return steps
+    known = {s.get("name") for s in steps}
+    return steps + [{"name": name, "status": status, "pending": True,
+                     "error": "statut final dans latest.json"}
+                    for name, status in STEPS_AFTER_REPORT if name not in known]
+
+
 def generate_report(
     diff: Dict[str, Any],
     stats: Dict[str, Any],
@@ -43,6 +60,6 @@ def generate_report(
     env = Environment(loader=FileSystemLoader(_TEMPLATES_DIR), autoescape=True)
     template = env.get_template("dr_report.html.j2")
     non_saved = non_saved or []
-    return template.render(diff=diff, stats=stats, steps=steps,
+    return template.render(diff=diff, stats=stats, steps=with_later_steps(steps),
                            non_saved=non_saved[:MAX_LISTED], non_saved_total=len(non_saved),
                            top=top or [])

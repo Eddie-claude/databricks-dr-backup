@@ -240,8 +240,9 @@ _uc_put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls))
 print(f"[02_schemas] {len(schema_ddls)} schemas exportés")
 
 _uc_put(f"{output_path}/03_tables.sql", "\n\n".join(table_ddls))
-print(f"[03_tables] {len(table_ddls)} définitions exportées : {len(table_names)} tables (données clonées "
-      f"ensuite par 02) et {view_count} vues (définition seule)"
+print(f"[03_tables] {len(table_ddls)} définitions exportées : {len(table_names)} "
+      f"table{'s' if len(table_names) > 1 else ''} (données clonées ensuite par 02) et {view_count} "
+      f"vue{'s' if view_count > 1 else ''} (définition seule)"
       + (f" ; {len(untyped_schemas)} schéma(s) au type inconnu, vues comptées comme tables" if untyped_schemas else "")
       + (f" ; {len(ddl_skipped)} table(s) étrangère(s) / index non exportés" if ddl_skipped else ""))
 
