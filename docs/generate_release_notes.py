@@ -107,6 +107,14 @@ add_table(
          "Synchronisation des droits du compte de backup (§3.6) et rapport de couverture mensuel (§3.3)"],
         ["Les metric views apparaissent dans uc_metadata/03_tables.sql (CREATE VIEW … WITH METRICS)",
          "Leur définition est désormais sauvegardée et restaurable (§2.17)"],
+        ["01_uc_metadata affiche « N tables et M vues » et des lignes [SKIP] pour les tables étrangères et index AI Search",
+         "Compteur détaillé ; ces objets ne sont plus en erreur d'export (§2.24, §2.27)"],
+        ["Un avertissement « pas admin du workspace » dans 05_workspace_config, tant que le droit n'est pas accordé",
+         "Le compte de backup doit être admin du workspace pour voir repos, jobs, pipelines et dossiers (§2.26)"],
+        ["Le rapport du daily liste les plus gros volumes copiés, avec la part de la table recopiée",
+         "Repère les tables réécrites entièrement chaque jour (§2.28)"],
+        ["Le rapport de couverture passe en vert les vues, volumes, fonctions, jobs, pipelines présents dans le backup",
+         "Le contenu du dernier backup prime sur le calcul des droits pour tous les objets (§2.23)"],
     ],
     col_widths=[6.5, 9.5],
 )
@@ -421,6 +429,73 @@ doc.add_paragraph(
     "il reste restaurable table par table."
 )
 
+add_heading(doc, "2.23 Rapport de couverture : le contenu du backup prime pour tous les objets", 2)
+
+doc.add_paragraph(
+    "Depuis le §2.21, le résultat du clone primait sur le calcul des droits pour les tables seulement ; vues, "
+    "volumes, fonctions, schémas, catalogs, jobs et pipelines restaient jugés sur ce calcul, souvent en écart "
+    "avec la réalité. Le rapport lit désormais tous les fichiers du dernier backup : uc_metadata/*.sql, "
+    "jobs/jobs_all.json, pipelines/pipelines_all.json, workspace/manifest.json. Un objet présent est sauvegardé ; "
+    "absent, il est « Absent du dernier backup » (ou « Couvert mais inaccessible » si les droits l'expliquent, ou "
+    "« Nouveau » s'il est postérieur au backup). Un job, pipeline ou dossier utilisateur absent signale en "
+    "général un compte de backup qui n'est pas admin du workspace (§2.26). Les libellés « Nouvelle table » et "
+    "« Absente du dernier backup » deviennent « Nouveau » et « Absent du dernier backup »."
+)
+
+add_heading(doc, "2.24 Tables étrangères et index AI Search", 2)
+
+doc.add_paragraph(
+    "SHOW CREATE TABLE ne sait pas décrire une table étrangère ni un index AI / Vector Search (type FOREIGN) : "
+    "01_uc_metadata affichait « Impossible d'exporter … DATA_SOURCE_NOT_FOUND ». Ces objets sont désormais "
+    "sautés avec un [SKIP] explicite et listés dans le résultat de l'étape (ddl_skipped). Leur définition dépend "
+    "d'une connexion ou d'un endpoint : elle relève de l'IaC. Le rapport de couverture les classe « Non couvert », "
+    "ou « As code » s'ils sont déclarés dans iac_file."
+)
+
+add_heading(doc, "2.25 Cause d'échec du clone vide ou illisible", 2)
+
+doc.add_paragraph(
+    "Une table en erreur pouvait apparaître dans le rapport du daily avec une cause vide (exception sans "
+    "message). Le message n'est plus jamais vide (nom de l'exception à défaut), et deux causes fréquentes sont "
+    "nommées en clair à côté du message Spark : « droits insuffisants du compte de backup sur la table » "
+    "(INSUFFICIENT_PERMISSIONS, PERMISSION_DENIED) et « table introuvable » (TABLE_OR_VIEW_NOT_FOUND : table "
+    "supprimée pendant le backup, ou invisible au compte de backup)."
+)
+
+add_heading(doc, "2.26 Export du workspace partiel en silence", 2)
+
+doc.add_paragraph(
+    "Les API des repos, jobs et pipelines ne renvoient que les objets visibles par le compte, sans erreur : en "
+    "datalab, aucun repo ni pipeline n'était exporté, sans message. 05_workspace_config vérifie désormais au "
+    "démarrage que le compte est admin du workspace et l'indique ; s'il ne l'est pas, un avertissement explicite "
+    "accompagne chaque liste vide (repos, jobs, pipelines). Le compte de backup doit être admin du workspace "
+    "(guide de déploiement §2.6). La liste des repos suit aussi sa pagination (seule la première page était "
+    "sauvegardée). Les dossiers techniques .db_internal et .ide, créés par Databricks dans chaque dossier "
+    "utilisateur, sont exclus (nouveau paramètre exclude_names) : sans valeur de restauration, ils provoquaient "
+    "des PERMISSION_DENIED."
+)
+
+add_heading(doc, "2.27 Libellés tables et vues", 2)
+
+doc.add_paragraph(
+    "01_uc_metadata affichait « 7716 tables exportées » en comptant les vues ; le rapport de couverture parlait de "
+    "« Table / vue ». La sortie de 01 distingue maintenant les tables (données clonées par 02) et les vues "
+    "(définition seule), et la synthèse du rapport sépare tables, vues, metric views, vues matérialisées et tables "
+    "étrangères. Les vues ne sont pas ignorées : leur définition est sauvegardée dans 03_tables.sql ; seul le "
+    "clone, qui copie des données, ne les concerne pas."
+)
+
+add_heading(doc, "2.28 Volume copié par le daily", 2)
+
+doc.add_paragraph(
+    "Le volume affiché par 02_data_clone est celui réellement copié (copied_files_size), pas la taille des "
+    "tables. Un clone incrémental recopie tous les fichiers nouveaux de la source : une table réécrite chaque "
+    "jour (INSERT OVERWRITE, MERGE large, OPTIMIZE) est recopiée presque entière, d'où un volume élevé pour peu "
+    "de tables. Le manifest du clone garde désormais la taille totale de chaque table (table_size_gb) et le "
+    "rapport du daily liste les 20 plus gros volumes copiés avec la part de la table recopiée. Rappel : le premier "
+    "daily après la mise à jour v4.2 recopie toutes les tables une fois (§2.13)."
+)
+
 doc.add_page_break()
 
 
@@ -568,6 +643,9 @@ numbered(doc, "Toujours dans votre databricks.yml : ajouter le job dr_backup_gra
               "(report, puis apply une fois validé). Voir guide de déploiement §8. De même pour le job "
               "dr_backup_coverage_report et ses variables coverage_output_dir et iac_identities "
               "(facultatives, guide §3.4).")
+numbered(doc, "Ajouter le compte du backup au groupe admins du workspace (guide de déploiement §2.6) : "
+              "sans ce droit, repos, jobs, pipelines et dossiers des utilisateurs ne sont exportés qu'en partie, "
+              "sans erreur (§2.26).")
 numbered(doc, "Accorder au compte du backup USE CATALOG sur le catalog system : "
               "GRANT USE CATALOG ON CATALOG system TO `<compte du backup>`.")
 numbered(doc, "Vérifier que le quota de vCPU de la famille ESv3 permet 8 vCPU supplémentaires dans la région, et qu'aucune politique de cluster n'interdit Standard_E8s_v3.")

@@ -129,10 +129,20 @@ print(f"[01_catalogs] {len(catalogs)} catalogs exportés : {catalogs}")
 # >>> REGLES TABLES
 CLONEABLE_TYPES = ("MANAGED", "EXTERNAL")
 
+# Types dont SHOW CREATE TABLE ne sait pas produire la définition : tables étrangères (Lakehouse
+# Federation) et index AI / Vector Search (cas client : DATA_SOURCE_NOT_FOUND « unsupported »).
+# Leur définition dépend d'une connexion ou d'un endpoint : à recréer en IaC, pas par le backup.
+DDL_SKIPPED_TYPES = {"FOREIGN": "table étrangère ou index AI Search : définition à recréer en IaC"}
+
 
 def cloneable_names(types: dict) -> set:
     """Tables dont les données se clonent : ni vues, ni vues matérialisées, ni tables étrangères."""
     return {name for name, kind in types.items() if kind in CLONEABLE_TYPES}
+
+
+def ddl_skip_reason(kind):
+    """Raison de ne pas exporter la définition, ou None si elle s'exporte (type inconnu compris)."""
+    return DDL_SKIPPED_TYPES.get((kind or "").upper())
 
 
 def api_table_types(get, catalog: str, schema: str) -> dict:
@@ -162,6 +172,8 @@ def _uc_api_get(path, params):
 schema_ddls = []
 table_ddls = []
 table_names = []
+view_count = 0          # définitions exportées hors clone (vues, metric views, vues matérialisées…)
+ddl_skipped = {}        # {table: raison} : définition non exportable (tables étrangères, index)
 untyped_schemas = []   # schémas dont le type des tables est resté inconnu (tout part au clone)
 
 for catalog in catalogs:
@@ -172,30 +184,36 @@ for catalog in catalogs:
     for schema in schemas:
         schema_ddls.append(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`;")
 
-        # Récupérer uniquement les tables cloneables (MANAGED/EXTERNAL, pas les vues)
+        # Type de chaque table : seules MANAGED / EXTERNAL partent au clone (pas les vues), et les
+        # tables étrangères / index ne sont pas exportés (SHOW CREATE TABLE les refuse)
         try:
-            cloneable_tables = {
-                r.table_name for r in spark.sql(f"""
-                    SELECT table_name FROM `{catalog}`.information_schema.tables
+            table_types = {
+                r.table_name: r.table_type for r in spark.sql(f"""
+                    SELECT table_name, table_type FROM `{catalog}`.information_schema.tables
                     WHERE table_schema = '{schema}'
-                    AND table_type IN ('MANAGED', 'EXTERNAL')
                 """).collect()
             }
         except Exception as e:
             try:
-                cloneable_tables = cloneable_names(api_table_types(_uc_api_get, catalog, schema))
+                table_types = api_table_types(_uc_api_get, catalog, schema)
                 print(f"[WARN] information_schema illisible pour {catalog}.{schema} ({_short(e)}) "
                       f"— types des tables lus via l'API Unity Catalog")
             except Exception as e_api:
                 # Dernier recours : tout part au clone, les vues y seront classées non clonables
-                cloneable_tables = None
+                table_types = None
                 untyped_schemas.append(f"{catalog}.{schema}")
                 print(f"[WARN] Types des tables inconnus pour {catalog}.{schema} "
                       f"(information_schema : {_short(e)} ; API : {_short(e_api)}) — vues comprises dans le clone")
+        cloneable_tables = None if table_types is None else cloneable_names(table_types)
 
         tables = spark.sql(f"SHOW TABLES IN `{catalog}`.`{schema}`").collect()
         for t in tables:
             fqn = f"`{catalog}`.`{schema}`.`{t.tableName}`"
+            skip_reason = ddl_skip_reason((table_types or {}).get(t.tableName))
+            if skip_reason:
+                ddl_skipped[f"{catalog}.{schema}.{t.tableName}"] = skip_reason
+                print(f"[SKIP] {catalog}.{schema}.{t.tableName} : {skip_reason}")
+                continue
             try:
                 try:
                     ddl_row = spark.sql(f"SHOW CREATE TABLE {fqn}").collect()[0][0]
@@ -213,7 +231,8 @@ for catalog in catalogs:
                 if cloneable_tables is None or t.tableName in cloneable_tables:
                     table_names.append(f"{catalog}.{schema}.{t.tableName}")
                 else:
-                    print(f"[SKIP] Vue ignorée pour le clone : {catalog}.{schema}.{t.tableName}")
+                    view_count += 1
+                    print(f"[SKIP] Vue ignorée pour le clone (définition exportée) : {catalog}.{schema}.{t.tableName}")
             except Exception as e:
                 print(f"[WARN] Impossible d'exporter {fqn}: {_short(e)}")
 
@@ -221,7 +240,10 @@ _uc_put(f"{output_path}/02_schemas.sql", "\n".join(schema_ddls))
 print(f"[02_schemas] {len(schema_ddls)} schemas exportés")
 
 _uc_put(f"{output_path}/03_tables.sql", "\n\n".join(table_ddls))
-print(f"[03_tables] {len(table_ddls)} tables exportées")
+print(f"[03_tables] {len(table_ddls)} définitions exportées : {len(table_names)} tables (données clonées "
+      f"ensuite par 02) et {view_count} vues (définition seule)"
+      + (f" ; {len(untyped_schemas)} schéma(s) au type inconnu, vues comptées comme tables" if untyped_schemas else "")
+      + (f" ; {len(ddl_skipped)} table(s) étrangère(s) / index non exportés" if ddl_skipped else ""))
 
 # COMMAND ----------
 # DBTITLE 1, Export volumes + fonctions
@@ -351,6 +373,8 @@ result = {
     "catalogs": catalogs,
     "skipped_catalogs": skipped_catalogs,
     "table_names": table_names,
+    "view_count": view_count,
+    "ddl_skipped": ddl_skipped,
     "untyped_schemas": untyped_schemas,
     "grant_count": len(grant_statements),
     "volume_count": len(volume_ddls),

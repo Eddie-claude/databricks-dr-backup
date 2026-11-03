@@ -27,3 +27,12 @@ def test_api_table_types_follows_pagination():
     assert api_table_types(get, "cat", "sch") == {"t1": "MANAGED", "v1": "VIEW"}
     assert calls[0][0] == "/api/2.1/unity-catalog/tables"
     assert calls[0][1]["catalog_name"] == "cat" and calls[0][1]["schema_name"] == "sch"
+
+
+def test_foreign_tables_and_indexes_are_not_exported():
+    # Cas client : index AI Search rouzele.default.knowledge_base (type FOREIGN), SHOW CREATE TABLE
+    # échouait en DATA_SOURCE_NOT_FOUND « unsupported »
+    reason = NS["ddl_skip_reason"]
+    assert "IaC" in reason("FOREIGN") and reason("foreign") == reason("FOREIGN")
+    for kind in ("MANAGED", "EXTERNAL", "VIEW", "METRIC_VIEW", "MATERIALIZED_VIEW", "STREAMING_TABLE", "", None):
+        assert reason(kind) is None

@@ -41,8 +41,24 @@ def test_unsupported_source_is_skipped_but_keeps_its_error_and_says_data_not_sav
 
 
 def test_other_failures_are_errors():
-    assert clone_failure("[PERMISSION_DENIED] User does not have SELECT") == {
-        "status": "error", "error": "[PERMISSION_DENIED] User does not have SELECT"}
+    assert clone_failure("[DELTA_X] something broke") == {"status": "error", "error": "[DELTA_X] something broke"}
+
+
+def test_permission_failures_get_a_readable_reason():
+    # Cas client : table sans droits du compte de backup, cause illisible dans le rapport
+    for err in ("[PERMISSION_DENIED] User does not have SELECT on Table",
+                "[INSUFFICIENT_PERMISSIONS] Insufficient privileges: User does not have USE SCHEMA"):
+        entry = clone_failure(err)
+        assert entry["status"] == "error" and entry["error"] == err
+        assert "droits insuffisants" in entry["reason"]
+    assert "introuvable" in clone_failure("[TABLE_OR_VIEW_NOT_FOUND] The table c.s.t cannot be found")["reason"]
+
+
+def test_error_message_is_never_empty():
+    # Cas client : table en erreur avec une cause vide dans le rapport
+    assert short(Exception()) == "Exception sans message"
+    assert short(KeyError()) == "KeyError sans message"
+    assert clone_failure("") == {"status": "error", "error": "erreur sans message"}
 
 
 # ── Clé de version source (skip du DEEP CLONE si rien n'a changé) ────────

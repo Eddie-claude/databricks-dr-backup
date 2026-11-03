@@ -48,7 +48,25 @@
     <tr>
       <td>{{ t.table }}</td>
       <td class="error">{{ t.status }}</td>
-      <td>{{ t.error | default(t.reason | default('')) }}</td>
+      <td>{% if t.reason %}<b>{{ t.reason }}</b>{% if t.error %} — {% endif %}{% endif %}{{ t.error or ("" if t.reason else "(message d'erreur vide : voir la sortie du notebook 02)") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if top %}
+  <h2>Plus gros volumes copiés ({{ top | length }})</h2>
+  <p>Volume réellement copié ce jour, rapporté à la taille de la table. Une part proche de 100 %
+  signale une table réécrite entièrement à chaque changement (INSERT OVERWRITE, MERGE large,
+  OPTIMIZE) : elle est recopiée presque entière à chaque backup.</p>
+  <table>
+    <tr><th>Table</th><th>Copié (GB)</th><th>Taille de la table (GB)</th><th>Part recopiée</th></tr>
+    {% for t in top %}
+    <tr>
+      <td>{{ t.table }}</td>
+      <td>{{ t.copied_gb }}</td>
+      <td>{{ t.table_gb if t.table_gb is not none else "—" }}</td>
+      <td>{{ (t.ratio_pct ~ " %") if t.ratio_pct is not none else "—" }}</td>
     </tr>
     {% endfor %}
   </table>

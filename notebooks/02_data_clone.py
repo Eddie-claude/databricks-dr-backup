@@ -143,20 +143,35 @@ def should_flush(pending: int, last_flush: float, now: float, every: int = 50, m
 
 
 def _short(e) -> str:
-    """Message d'erreur sans la stacktrace JVM, borné : il est stocké dans le checkpoint et le manifest."""
-    return " ".join(str(e).split("JVM stacktrace:")[0].split())[:2000]
+    """Message d'erreur sans la stacktrace JVM, borné : il est stocké dans le checkpoint et le manifest.
+    Jamais vide : une exception sans message laissait une ligne « error » muette dans le rapport
+    (cas client : table sans droits en erreur avec une cause vide)."""
+    msg = " ".join(str(e).split("JVM stacktrace:")[0].split())[:2000]
+    return msg or f"{type(e).__name__} sans message"
 
 
 NON_CLONABLE_REASON = ("non clonable : données NON sauvegardées (format non Delta, filtre de lignes "
                        "ou masque de colonnes, vue)")
+
+# Causes reconnues d'un échec, en clair dans le rapport (le message Spark brut reste dans « error »)
+FAILURE_REASONS = (
+    (("INSUFFICIENT_PERMISSIONS", "PERMISSION_DENIED", "does not have"),
+     "droits insuffisants du compte de backup sur la table (SELECT, USE SCHEMA, USE CATALOG)"),
+    (("TABLE_OR_VIEW_NOT_FOUND",),
+     "table introuvable : supprimée pendant le backup, ou invisible au compte de backup (USE SCHEMA / BROWSE)"),
+)
 
 
 def clone_failure(err: str) -> dict:
     """Statut d'un DEEP CLONE refusé. Une source non clonable est « skipped » (limite connue, pas
     une panne) mais garde son message : une table à filtre de lignes arrivait ici avec la raison
     « vue ou format non cloneable », sans que rien ne dise que ses données manquaient."""
+    err = err or "erreur sans message"
     if "DELTA_CLONE_UNSUPPORTED_SOURCE" in err or "format is View" in err:
         return {"status": "skipped", "reason": NON_CLONABLE_REASON, "error": err}
+    for codes, reason in FAILURE_REASONS:
+        if any(code in err for code in codes):
+            return {"status": "error", "reason": reason, "error": err}
     return {"status": "error", "error": err}
 
 
@@ -374,10 +389,15 @@ def clone_one(args: tuple) -> dict:
                 break
         size_gb   = copied_bytes / (1024**3)
         num_files = metrics.get("num_copied_files", 0)
+        # Taille totale de la source : rapportée au volume copié, elle montre les tables réécrites
+        # chaque jour (INSERT OVERWRITE, MERGE large, OPTIMIZE) — copiées presque entières
+        table_size_gb = (round(int(metrics["source_table_size"]) / (1024**3), 4)
+                         if metrics.get("source_table_size") is not None else None)
         entry = {
             "table":        fqn,
             "status":       "success",
             "size_gb":      round(size_gb, 4),
+            "table_size_gb": table_size_gb,
             "num_files":    num_files,
             "duration_s":   round(elapsed, 1),
             "incremental":  num_files == 0,

@@ -51,6 +51,8 @@ dbutils.widgets.text("backup_root",        "", "Backup root (abfss://...)")
 dbutils.widgets.text("backup_date",        str(date.today()), "Date backup YYYY-MM-DD")
 dbutils.widgets.text("workspace_paths",    "/", "Chemins workspace à exporter (séparés par virgule)")
 dbutils.widgets.text("exclude_paths",      "/Repos", "Chemins exclus (séparés par virgule) — /Repos : contenu dans Git")
+dbutils.widgets.text("exclude_names",      ".db_internal,.ide",
+                     "Noms de dossiers exclus à toute profondeur (séparés par virgule) — dossiers techniques Databricks")
 dbutils.widgets.text("export_notebooks",   "true",  "Exporter notebooks / fichiers / dashboards (true/false)")
 dbutils.widgets.text("export_jobs",        "true",  "Exporter les définitions et permissions des jobs (true/false)")
 dbutils.widgets.text("export_pipelines",   "true",  "Exporter les définitions et permissions des pipelines (true/false)")
@@ -64,6 +66,7 @@ backup_root      = dbutils.widgets.get("backup_root")
 backup_date      = dbutils.widgets.get("backup_date")
 workspace_paths  = [p.strip() for p in dbutils.widgets.get("workspace_paths").split(",") if p.strip()]
 exclude_paths    = [p.strip().rstrip("/") for p in dbutils.widgets.get("exclude_paths").split(",") if p.strip()]
+exclude_names    = {n.strip() for n in dbutils.widgets.get("exclude_names").split(",") if n.strip()}
 export_notebooks = dbutils.widgets.get("export_notebooks").lower() == "true"
 export_jobs      = dbutils.widgets.get("export_jobs").lower()      == "true"
 export_pipelines = dbutils.widgets.get("export_pipelines").lower() == "true"
@@ -77,13 +80,40 @@ import sys
 sys.path.insert(0, dbutils.widgets.get("lib_path"))
 from workspace_export import call_with_retry, list_all_jobs
 
+# >>> REGLES WORKSPACE
+def is_excluded(path: str, exclude_paths: list, exclude_names: set) -> bool:
+    """Chemin exclu : sous un des exclude_paths, ou contenant un dossier nommé dans exclude_names
+    (dossiers techniques créés par Databricks dans chaque dossier utilisateur : /Users/x/.db_internal,
+    /Users/x/.ide — sans valeur de restauration, et refusés au compte de backup s'il n'est pas admin)."""
+    if any(path == x or path.startswith(x + "/") for x in exclude_paths):
+        return True
+    return bool(exclude_names & set(path.split("/")))
+
+
+def is_workspace_admin(me: dict) -> bool:
+    """Le compte (réponse de /api/2.0/preview/scim/v2/Me) est-il membre du groupe admins du workspace ?"""
+    return any(g.get("display") == "admins" for g in (me or {}).get("groups", []) or [])
+
+
+ADMIN_HINT = ("les API repos, jobs et pipelines ne renvoient que les objets visibles par le compte, sans "
+              "erreur : sans droit admin du workspace, l'export est partiel en silence")
+# <<< REGLES WORKSPACE
+
 
 def _get(url, **kw):
     """GET rejoué sur limitation de débit (429) : sans réessai, des objets manquaient en silence."""
     return call_with_retry(lambda: requests.get(url, headers=headers, **kw))
 
 output_base = f"{backup_root}/{backup_date}"
-print(f"[OK] Workspace paths : {workspace_paths} | exclus : {exclude_paths}")
+print(f"[OK] Workspace paths : {workspace_paths} | exclus : {exclude_paths} | noms exclus : {sorted(exclude_names)}")
+
+_me = _get(f"{host}/api/2.0/preview/scim/v2/Me", timeout=30)
+workspace_admin = is_workspace_admin(_me.json()) if _me.ok else None
+if workspace_admin:
+    print("[OK] Compte du job admin du workspace : repos, jobs, pipelines et dossiers de tous les utilisateurs visibles")
+else:
+    print(f"[WARN] Compte du job {'non vérifié' if workspace_admin is None else 'pas admin du workspace'} : "
+          f"{ADMIN_HINT}. Ajouter le compte de backup au groupe admins du workspace (guide §2.6).")
 print(f"[OK] export_notebooks={export_notebooks} | export_jobs={export_jobs} | export_pipelines={export_pipelines}")
 
 # COMMAND ----------
@@ -97,7 +127,7 @@ def get_acl(object_type, object_id):
     return []
 
 def _excluded(path: str) -> bool:
-    return any(path == x or path.startswith(x + "/") for x in exclude_paths)
+    return is_excluded(path, exclude_paths, exclude_names)
 
 unreadable_dirs = []
 
@@ -156,8 +186,20 @@ print(f"[OK] {len(acls_backup)} ACLs workspace sauvegardées")
 # MAGIC %md ## 5.2 — ACLs Repos Git
 
 # COMMAND ----------
-resp  = _get(f"{host}/api/2.0/repos", timeout=30)
-repos = resp.json().get("repos", []) if resp.ok else []
+# Paginé : sans suivre next_page_token, seule la première page de repos était sauvegardée
+repos, params = [], {}
+while True:
+    resp = _get(f"{host}/api/2.0/repos", params=params, timeout=30)
+    if not resp.ok:
+        print(f"[WARN] Repos API échoué : {resp.status_code} — {resp.text[:200]}")
+        break
+    d = resp.json()
+    repos += d.get("repos", []) or []
+    if not d.get("next_page_token"):
+        break
+    params = {"next_page_token": d["next_page_token"]}
+if not repos and not workspace_admin:
+    print(f"[WARN] Aucun repo listé : l'API ne renvoie que les repos sur lesquels le compte a CAN MANAGE — {ADMIN_HINT}")
 
 repos_acls = []
 for repo in repos:
@@ -234,7 +276,7 @@ if export_notebooks:
         print(f"  … {min(start + BATCH_SIZE, len(to_export))}/{len(to_export)}")
 
     _uc_put(f"{output_base}/workspace/manifest.json", json.dumps({
-        "workspace_paths": workspace_paths, "exclude_paths": exclude_paths,
+        "workspace_paths": workspace_paths, "exclude_paths": exclude_paths, "exclude_names": sorted(exclude_names),
         "unreadable_dirs": unreadable_dirs, "objects": manifest_entries,
     }))
     print(f"[OK] Exportés : {nb_ok} notebook(s), {files_ok} fichier(s)/dashboard(s), {nb_error} erreur(s)")
@@ -283,7 +325,8 @@ if export_jobs:
 
         print(f"[OK] {jobs_ok} jobs exportés ({jobs_error} erreurs), permissions de {len(job_acls)} jobs")
     else:
-        print("[WARN] Aucun job trouvé ou API inaccessible")
+        print("[WARN] Aucun job trouvé ou API inaccessible"
+              + ("" if workspace_admin else f" — {ADMIN_HINT}"))
 else:
     print("[INFO] Export jobs désactivé (export_jobs=false)")
 
@@ -325,6 +368,8 @@ if export_pipelines:
             pipelines_error += 1
             print(f"  [WARN] Pipeline {err}")
     pipelines_ok = len(pipelines)
+    if not statuses and not workspace_admin:
+        print(f"[WARN] Aucun pipeline listé : l'API ne renvoie que les pipelines visibles par le compte — {ADMIN_HINT}")
     _uc_put(f"{output_base}/pipelines/pipelines_all.json", json.dumps(pipelines, indent=2))
     print(f"[OK] {pipelines_ok} pipeline(s) exporté(s) ({pipelines_error} erreurs)")
 else:
@@ -345,6 +390,7 @@ summary = {
     "jobs_error":           jobs_error,
     "pipelines_ok":         pipelines_ok,
     "pipelines_error":      pipelines_error,
+    "workspace_admin":      workspace_admin,
 }
 
 print(f"""

@@ -112,11 +112,11 @@ VERDICTS = {  # code: (pastille, libellé, couleur, ordre d'affichage)
     "OK":           ("✅", "Sauvegardé et restaurable",           "#1a7f37", 1),
     "AS_CODE":      ("🔵", "As code (IaC)",                        "#1f6feb", 2),
     "AUTRE":        ("⚪", "Autre moyen",                          "#6e7781", 3),
-    "NOUVEAU":      ("⚪", "Nouvelle table (après le dernier backup)", "#6e7781", 4),
+    "NOUVEAU":      ("⚪", "Nouveau (après le dernier backup)",    "#6e7781", 4),
     "PARTIEL":      ("🟡", "Partiel",                              "#bf8700", 5),
     "INACCESSIBLE": ("🔴", "Couvert mais inaccessible au backup",  "#cf222e", 6),
     "ECHEC":        ("🔴", "Échec au dernier backup",              "#cf222e", 7),
-    "ABSENT":       ("🔴", "Absente du dernier backup",            "#cf222e", 8),
+    "ABSENT":       ("🔴", "Absent du dernier backup",             "#cf222e", 8),
     "NON_COUVERT":  ("🔴", "Non couvert",                          "#cf222e", 9),
     "EXCLU":        ("⚫", "Exclu volontairement",                 "#24292f", 10),
 }
@@ -216,6 +216,10 @@ def coverage(kind: str, sub: str = "", fmt: str = "", version: str = "v4.2", pro
     if kind == "SCHEMA":
         return "SCRIPT", "NA", "DDL exporté (uc_metadata/02_schemas.sql)"
     if kind == "TABLE":
+        if sub == "FOREIGN":
+            return "NONE", "OTHER", ("Table étrangère ou index AI Search : définition liée à une connexion ou "
+                                     "un endpoint, non exportable (SHOW CREATE TABLE la refuse) ; à recréer en "
+                                     "IaC — la déclarer dans iac_file pour la classer « as code »")
         if sub == "METRIC_VIEW":
             if v42:
                 return "SCRIPT", "NA", "Définition YAML exportée (uc_metadata/03_tables.sql, CREATE VIEW … WITH METRICS)"
@@ -302,12 +306,65 @@ def pipeline_code_covered(paths: list, has_files: bool = False, version: str = "
     return True
 
 
+_CREATED_OBJECT = re.compile(
+    r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:EXTERNAL|MATERIALIZED|STREAMING|TEMPORARY)\s+)*"
+    r"(?:CATALOG|SCHEMA|TABLE|VIEW|VOLUME|FUNCTION)\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"((?:`[^`]+`|[\w$]+)(?:\.(?:`[^`]+`|[\w$]+)){0,2})",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def exported_names(sql_text: str) -> set:
+    """Noms complets (minuscules, sans backticks) des objets créés par un fichier uc_metadata/*.sql
+    du backup : c'est la preuve que leur définition a été sauvegardée."""
+    return {m.group(1).replace("`", "").lower() for m in _CREATED_OBJECT.finditer(sql_text or "")}
+
+
+TABLE_SUB_LABELS = {"VIEW": "Vue", "METRIC_VIEW": "Metric view", "MATERIALIZED_VIEW": "Vue matérialisée",
+                    "STREAMING_TABLE": "Streaming table", "FOREIGN": "Table étrangère / index"}
+
+
+def type_label(kind: str, sub: str, labels: dict) -> str:
+    """Libellé du type dans la synthèse : les vues ne sont pas mêlées aux tables (leur définition est
+    sauvegardée, pas de données), ce que « Table / vue » laissait mal voir."""
+    if kind == "TABLE":
+        return TABLE_SUB_LABELS.get((sub or "").upper(), "Table")
+    return labels.get(kind, kind)
+
+
+def backup_presence(present, created, backup_at) -> str:
+    """present / new / absent d'un objet au regard du dernier backup ; None si inconnu.
+    present = True / False / None (fichier du backup non lu) ; un objet créé après le backup est
+    « new » (pris au prochain), pas « absent »."""
+    if present is None:
+        return None
+    if present:
+        return "present"
+    return "new" if created and backup_at and created >= backup_at else "absent"
+
+
 def verdict(def_cov: str, data_cov: str, excluded: bool = False, accessible=None, last_status=None,
-            iac: bool = False) -> str:
+            iac: bool = False, def_status=None) -> str:
     if excluded:
         return "EXCLU"
     if def_cov == "NONE":
         return "NON_COUVERT"
+    # Définition : sa présence dans les fichiers du dernier backup (uc_metadata, jobs, pipelines,
+    # inventaire du workspace) prime aussi sur le calcul des droits. Une donnée en erreur reste un
+    # échec même si la définition est là : testé avant.
+    if data_cov == "SCRIPT" and last_status in ("error", "skipped"):
+        return "ECHEC"
+    if def_cov == "SCRIPT" and def_status:
+        if def_status == "present":
+            # Définition lue par le backup : l'accès est prouvé, sauf pour des données absentes du
+            # manifest du clone (traitées ci-dessous)
+            if last_status in (None, "success"):
+                accessible = True
+        elif def_status == "absent" and iac and data_cov != "SCRIPT":
+            def_cov = "IAC"             # absente du backup, mais recréée par l'IaC
+        elif def_status == "absent":
+            return "INACCESSIBLE" if accessible is False else "ABSENT"
+        elif def_status == "new":
+            return "INACCESSIBLE" if accessible is False else "NOUVEAU"
     # Pour des données clonées, le dernier backup réel prime sur le calcul des droits, qui reste
     # théorique (droits hérités d'un MANAGE, d'un propriétaire parent… qu'il ne voit pas) :
     #   success          → l'accès est prouvé, quel que soit le calcul
@@ -351,7 +408,8 @@ if iac_file:
         warn(f"Fichier as code illisible ({iac_file}) : {_short(e)}")
 
 def _read_text(path: str) -> str:
-    return spark.read.text(path, wholetext=True).collect()[0][0]
+    rows = spark.read.text(path, wholetext=True).collect()
+    return rows[0][0] if rows else ""      # fichier vide (aucune fonction, aucun volume…)
 
 last_status_by_table, last_backup_date, last_backup_status, last_backup_at = {}, None, None, None
 if backup_root:
@@ -381,6 +439,34 @@ if backup_version == "auto":
     backup_version = "v4.1"
     warn("Version du backup déployée inconnue (backup_root vide ou illisible) : hypothèse prudente v4.1")
 print(f"[OK] Règles appliquées : backup {backup_version}")
+
+# Définitions réellement présentes dans le dernier backup : {type: noms ou identifiants}. None = fichier
+# non lu, le calcul des droits reste alors le seul indicateur pour ce type. Lu pour un backup v4.2
+# seulement (en v4.1, les vues étaient exportées sans leur catalogue : noms non comparables).
+exported, exported_ws_paths, backup_files_unread = {}, None, []
+if last_backup_at and backup_version == "v4.2":
+    _base = f"{backup_root}/{last_backup_date}"
+
+    def _backup_file(label: str, path: str, parse):
+        try:
+            return parse(_read_text(path))
+        except Exception as ex:
+            backup_files_unread.append(label)
+            print(f"[WARN] {label} non lisible dans le dernier backup : {_short(ex)}")
+            return None
+
+    for _kind, _f in (("CATALOG", "01_catalogs.sql"), ("SCHEMA", "02_schemas.sql"), ("TABLE", "03_tables.sql"),
+                      ("VOLUME", "05_volumes.sql"), ("FUNCTION", "06_functions.sql")):
+        exported[_kind] = _backup_file(f"uc_metadata/{_f}", f"{_base}/uc_metadata/{_f}", exported_names)
+    exported["JOB"] = _backup_file("jobs/jobs_all.json", f"{_base}/jobs/jobs_all.json",
+                                   lambda t: {str(j.get("job_id")) for j in json.loads(t)})
+    exported["PIPELINE"] = _backup_file("pipelines/pipelines_all.json", f"{_base}/pipelines/pipelines_all.json",
+                                        lambda t: {str(x.get("pipeline_id")) for x in json.loads(t)})
+    exported_ws_paths = _backup_file("workspace/manifest.json", f"{_base}/workspace/manifest.json",
+                                     lambda t: [o.get("path", "") for o in json.loads(t).get("objects", [])])
+    print("[OK] Contenu du dernier backup : " + ", ".join(
+        f"{k.lower()} {len(v)}" for k, v in exported.items() if v is not None)
+        + (f", workspace {len(exported_ws_paths)} objets" if exported_ws_paths is not None else ""))
 
 # COMMAND ----------
 # MAGIC %md ## 2 — Inventaire du metastore
@@ -420,7 +506,7 @@ tables    = [r for r in _query("Tables / vues", f"SELECT table_catalog, table_sc
              if _in_scope(r["table_catalog"])]
 volumes   = [r for r in _query("Volumes", f"SELECT * FROM {IS}.volumes WHERE volume_schema <> 'information_schema'")
              if _in_scope(r["volume_catalog"])]
-functions = [r for r in _query("Fonctions", f"SELECT routine_catalog, routine_schema, routine_name, routine_owner, "
+functions = [r for r in _query("Fonctions", f"SELECT routine_catalog, routine_schema, routine_name, routine_owner, created, "
                                f"created_by FROM {IS}.routines WHERE routine_schema <> 'information_schema'")
              if _in_scope(r["routine_catalog"])]
 protected_tables = {
@@ -586,7 +672,7 @@ print(f"[OK] {len(jobs)} jobs, {len(pipelines)} pipelines, {len(ws_roots)} dossi
 
 # COMMAND ----------
 TYPE_LABELS = {
-    "CATALOG": "Catalog", "SCHEMA": "Schéma", "TABLE": "Table / vue", "VOLUME": "Volume",
+    "CATALOG": "Catalog", "SCHEMA": "Schéma", "TABLE": "Table", "VOLUME": "Volume",
     "FUNCTION": "Fonction", "MODEL": "Modèle MLflow", "EXTERNAL_LOCATION": "External location",
     "STORAGE_CREDENTIAL": "Storage credential", "CONNECTION": "Connexion", "SHARE": "Share Delta Sharing",
     "RECIPIENT": "Recipient Delta Sharing", "JOB": "Job", "PIPELINE": "Pipeline",
@@ -595,7 +681,8 @@ TYPE_LABELS = {
 rows = []
 
 def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="", accessible=None, protected=False,
-        last_status=None, created=None, note="", def_cov=None, data_cov=None, iac_force=None, explanation=None):
+        last_status=None, created=None, present=None, note="", def_cov=None, data_cov=None, iac_force=None,
+        explanation=None):
     d, data, default_explanation = coverage(kind, sub, fmt, backup_version, protected=protected)
     d, data = def_cov or d, data_cov or data
     explanation = explanation or default_explanation
@@ -609,11 +696,15 @@ def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="",
     # Table clonable absente du manifest : nouvelle si créée après ce backup, sinon non copiée
     if clonable and last_status is None and last_status_by_table:
         last_status = "new" if created and last_backup_at and created >= last_backup_at else "absent"
+    def_status = backup_presence(present, created, last_backup_at)
     v = verdict(d, data, excluded=(catalog or "").lower() in excluded_catalogs,
-                accessible=accessible, last_status=last_status, iac=bool(iac))
-    last_label = {"new": "nouvelle", None: "—"}.get(last_status, last_status)
+                accessible=accessible, last_status=last_status, iac=bool(iac), def_status=def_status)
+    if last_status:
+        last_label = {"new": "nouvelle"}.get(last_status, last_status)
+    else:
+        last_label = {"present": "dans le backup", "new": "nouveau", "absent": "absent", None: "—"}[def_status]
     rows.append({
-        "Domaine": domain, "Type": TYPE_LABELS.get(kind, kind), "Sous-type": sub or "",
+        "Domaine": domain, "Type": type_label(kind, sub, TYPE_LABELS), "Sous-type": sub or "",
         "Catalog": catalog or "", "Objet": name, "Propriétaire": owner or "", "Créé par": created_by or "",
         "Définition": LABELS_COV[d], "Données": LABELS_COV[data],
         "As code": f"Oui ({iac})" if iac else "Non",
@@ -623,15 +714,25 @@ def add(domain, kind, name, sub="", fmt="", catalog="", owner="", created_by="",
         "Explication": explanation + (f" — {note}" if note else ""),
     })
 
+def _present(kind: str, key):
+    """L'objet figure-t-il dans le dernier backup ? None si le fichier correspondant n'a pas été lu."""
+    found = exported.get(kind)
+    return None if found is None else str(key).lower() in found
+
+def _from_ms(ms):
+    return datetime.utcfromtimestamp(ms / 1000) if ms else None
+
 for n, c in sorted(catalogs.items()):
     add("Metastore", "CATALOG", c["name"], sub=c.get("catalog_type", ""), catalog=c["name"],
         owner=c.get("owner"), created_by=c.get("created_by"),
-        accessible=access("CATALOG", n) if n in standard_catalogs else None)
+        accessible=access("CATALOG", n) if n in standard_catalogs else None,
+        present=_present("CATALOG", n) if n in standard_catalogs else None, created=_from_ms(c.get("created_at")))
 
 for s in schemas:
     add("Metastore", "SCHEMA", f"{s['catalog_name']}.{s['schema_name']}", catalog=s["catalog_name"],
         owner=s["schema_owner"], created_by=s["created_by"],
-        accessible=access("SCHEMA", s["catalog_name"], s["schema_name"]))
+        accessible=access("SCHEMA", s["catalog_name"], s["schema_name"]),
+        present=_present("SCHEMA", f"{s['catalog_name']}.{s['schema_name']}"), created=s.get("created"))
 
 for t in tables:
     fqn = f"{t['table_catalog']}.{t['table_schema']}.{t['table_name']}"
@@ -639,17 +740,21 @@ for t in tables:
         owner=t["table_owner"], created_by=t["created_by"],
         accessible=access("TABLE", t["table_catalog"], t["table_schema"], t["table_name"], t["table_owner"]),
         protected=(t["table_catalog"].lower(), t["table_schema"].lower(), t["table_name"].lower()) in protected_tables,
-        last_status=last_status_by_table.get(fqn.lower()), created=t.get("created"))
+        last_status=last_status_by_table.get(fqn.lower()), created=t.get("created"), present=_present("TABLE", fqn))
 
 for v in volumes:
     add("Metastore", "VOLUME", f"{v['volume_catalog']}.{v['volume_schema']}.{v['volume_name']}",
         sub=v["volume_type"], catalog=v["volume_catalog"], owner=v["volume_owner"], created_by=v["created_by"],
-        accessible=access("VOLUME", v["volume_catalog"], v["volume_schema"], v["volume_name"], v["volume_owner"]))
+        accessible=access("VOLUME", v["volume_catalog"], v["volume_schema"], v["volume_name"], v["volume_owner"]),
+        present=_present("VOLUME", f"{v['volume_catalog']}.{v['volume_schema']}.{v['volume_name']}"),
+        created=v.get("created"))
 
 for f in functions:
     add("Metastore", "FUNCTION", f"{f['routine_catalog']}.{f['routine_schema']}.{f['routine_name']}",
         catalog=f["routine_catalog"], owner=f["routine_owner"], created_by=f["created_by"],
-        accessible=access("FUNCTION", f["routine_catalog"], f["routine_schema"], f["routine_name"], f["routine_owner"]))
+        accessible=access("FUNCTION", f["routine_catalog"], f["routine_schema"], f["routine_name"], f["routine_owner"]),
+        present=_present("FUNCTION", f"{f['routine_catalog']}.{f['routine_schema']}.{f['routine_name']}"),
+        created=f.get("created"))
 
 for m in models:
     add("Metastore", "MODEL", m.get("full_name", ""), catalog=m.get("catalog_name"),
@@ -678,7 +783,8 @@ for j in jobs:
     s = j.get("settings", {})
     bundle = (s.get("deployment") or {}).get("kind") == "BUNDLE"
     add("Workspace", "JOB", s.get("name", str(j.get("job_id"))), owner=j.get("run_as_user_name"),
-        created_by=j.get("creator_user_name"), iac_force="bundle" if bundle else None)
+        created_by=j.get("creator_user_name"), iac_force="bundle" if bundle else None,
+        present=_present("JOB", j.get("job_id")), created=_from_ms(j.get("created_time")))
 
 for p in pipelines:
     spec = p.get("spec", {}) or {}
@@ -688,7 +794,7 @@ for p in pipelines:
     code_ok = pipeline_code_covered(nb_paths + file_paths, has_files=bool(file_paths), version=backup_version)
     add("Workspace", "PIPELINE", spec.get("name") or p.get("name", p.get("pipeline_id", "")),
         catalog=spec.get("catalog", ""), created_by=p.get("creator_user_name"),
-        iac_force="bundle" if bundle else None,
+        iac_force="bundle" if bundle else None, present=_present("PIPELINE", p.get("pipeline_id")),
         note=("code source dans le périmètre exporté" if code_ok else "code source NON sauvegardé")
              + (f" ({', '.join(paths[:3])})" if paths else ""))
 
@@ -696,7 +802,15 @@ for path in sorted(ws_roots):
     d, data, ws_explanation = workspace_root_coverage(path, backup_version)
     c = ws_counts.get(path)
     note = f"{c['NOTEBOOK']} notebook(s), {c['FILE']} fichier(s), {c['DASHBOARD']} dashboard(s)" if c else ""
-    add("Workspace", "WORKSPACE", path, def_cov=d, data_cov=data, note=note, explanation=ws_explanation)
+    # Présent si le backup contient au moins un objet du dossier ; absent s'il n'en contient aucun
+    # alors que le dossier n'est pas vide (dossier illisible au compte de backup) ; inconnu sinon
+    ws_present = None
+    if exported_ws_paths is not None:
+        n_exp = sum(1 for x in exported_ws_paths if x == path or x.startswith(path.rstrip("/") + "/"))
+        ws_present = True if n_exp else (False if c and sum(c.values()) else None)
+        note += f"{' — ' if note else ''}{n_exp} objet(s) dans le backup"
+    add("Workspace", "WORKSPACE", path, def_cov=d, data_cov=data, note=note, explanation=ws_explanation,
+        present=ws_present)
 
 print(f"[OK] {len(rows)} objets évalués")
 
@@ -854,14 +968,17 @@ if totals.get("INACCESSIBLE"):
                      f"de backup <code>{e(backup_principal)}</code> n'a pas les droits nécessaires "
                      "(USE CATALOG, USE SCHEMA, SELECT / READ VOLUME / EXECUTE).")
 if totals.get("ABSENT"):
-    attention.append(f"<b>{totals['ABSENT']}</b> table(s) existaient avant le dernier backup mais n'y figurent pas, "
-                     "sans que le calcul des droits l'explique : vérifier que le compte de backup voit leur "
-                     "catalog et leur schéma (un objet invisible n'est pas listé, donc pas copié).")
-if last_status_by_table:
-    attention.append(f"Pour les tables, le résultat du dernier backup ({e(last_backup_date)}) prime sur le calcul "
-                     "des droits : une table copiée est sauvegardée, même si ses droits ne sont pas visibles. "
-                     "Pour les vues, volumes, fonctions, schémas et catalogs, absents du manifest du clone, seul "
-                     "le calcul des droits est disponible.")
+    attention.append(f"<b>{totals['ABSENT']}</b> objet(s) existaient avant le dernier backup mais n'y figurent pas, "
+                     "sans que le calcul des droits l'explique : vérifier que le compte de backup les voit (un "
+                     "objet invisible n'est pas listé, donc pas sauvegardé). Pour les jobs, pipelines, repos et "
+                     "dossiers utilisateurs, le compte de backup doit être admin du workspace.")
+if exported or last_status_by_table:
+    attention.append(f"Le contenu du dernier backup ({e(last_backup_date)}) prime sur le calcul des droits : un objet "
+                     "présent dans le backup (données clonées, définition dans uc_metadata, job, pipeline, objet du "
+                     "workspace) est sauvegardé, même si ses droits ne sont pas visibles ; le calcul des droits "
+                     "n'explique plus qu'une absence."
+                     + (f" Fichiers non lus, pour lesquels seul le calcul des droits est disponible : "
+                        f"{e(', '.join(backup_files_unread))}." if backup_files_unread else ""))
 if not access_checked:
     attention.append("Les droits du compte de backup n'ont pas été vérifiés (paramètre <code>backup_principal</code> vide).")
 attention.append("Les permissions (GRANT) sont sauvegardées pour les catalogs, schémas et tables"

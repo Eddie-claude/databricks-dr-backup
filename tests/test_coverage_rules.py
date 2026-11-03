@@ -251,3 +251,82 @@ def test_group_closure_without_groups():
 
 def test_sql_in_list_quotes_and_dedups():
     assert R["sql_in_list"](["account users", "o'brien", "account users"]) == "('account users', 'o''brien')"
+
+
+# ── Couverture réelle : contenu du dernier backup pour tous les objets (retour client datalab) ──
+
+def test_exported_names_reads_every_kind_of_definition():
+    sql = """CREATE CATALOG IF NOT EXISTS `Prod`
+  MANAGED LOCATION 'abfss://x';
+CREATE SCHEMA IF NOT EXISTS `prod`.`Raw`;
+CREATE TABLE `prod`.`raw`.`T1` (id INT) USING delta;
+
+CREATE VIEW `prod`.`raw`.`v1` (id) AS SELECT * FROM prod.raw.t1;
+CREATE VIEW `prod`.`raw`.`mv_metric`
+WITH METRICS LANGUAGE YAML AS $$ x $$;
+CREATE MATERIALIZED VIEW `prod`.`raw`.`mat` AS SELECT 1;
+CREATE OR REPLACE STREAMING TABLE `prod`.`raw`.`st` AS SELECT 1;
+CREATE EXTERNAL VOLUME IF NOT EXISTS `prod`.`raw`.`landing`
+  LOCATION 'abfss://y';
+CREATE VOLUME IF NOT EXISTS `prod`.`raw`.`files`;
+CREATE FUNCTION IF NOT EXISTS `prod`.`raw`.`f`(x INT)
+  RETURNS INT
+  RETURN x + 1;"""
+    assert R["exported_names"](sql) == {
+        "prod", "prod.raw", "prod.raw.t1", "prod.raw.v1", "prod.raw.mv_metric", "prod.raw.mat", "prod.raw.st",
+        "prod.raw.landing", "prod.raw.files", "prod.raw.f"}
+    assert R["exported_names"]("") == set() and R["exported_names"](None) == set()
+
+
+def test_views_are_not_labelled_as_tables():
+    # Cas client : « Table / vue » dans la synthèse laissait penser que les vues étaient ignorées
+    label = lambda kind, sub: R["type_label"](kind, sub, {"SCHEMA": "Schéma"})
+    assert label("TABLE", "MANAGED") == "Table" and label("TABLE", "EXTERNAL") == "Table"
+    assert label("TABLE", "VIEW") == "Vue" and label("TABLE", "METRIC_VIEW") == "Metric view"
+    assert label("TABLE", "MATERIALIZED_VIEW") == "Vue matérialisée"
+    assert label("TABLE", "FOREIGN") == "Table étrangère / index"
+    assert label("SCHEMA", "") == "Schéma"
+
+
+def test_foreign_tables_are_not_covered_unless_as_code():
+    d, data, why = R["coverage"]("TABLE", "FOREIGN", "", "v4.2")
+    assert (d, data) == ("NONE", "OTHER") and "IaC" in why
+    assert R["verdict"](R["apply_iac"](d, "fichier"), data, iac=True) == "AUTRE"
+    assert R["verdict"](d, data) == "NON_COUVERT"
+
+
+def test_backup_presence():
+    from datetime import datetime
+    at = datetime(2026, 11, 2, 3, 0)
+    assert R["backup_presence"](None, None, at) is None
+    assert R["backup_presence"](True, None, at) == "present"
+    assert R["backup_presence"](False, datetime(2026, 11, 2, 9, 0), at) == "new"
+    assert R["backup_presence"](False, datetime(2026, 1, 1), at) == "absent"
+    assert R["backup_presence"](False, None, at) == "absent"
+
+
+@pytest.mark.parametrize("kwargs,expected", [
+    # vue, fonction, volume, schéma, job… présents dans le backup : sauvegardés, droits ou pas
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=False, def_status="present"), "OK"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", accessible=None, def_status="present"), "OK"),     # volume managé
+    (dict(def_cov="SCRIPT", data_cov="OTHER", accessible=False, def_status="present"), "AUTRE"),  # vue matérialisée
+    # absents du backup : les droits donnent la cause, sinon « absent »
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=False, def_status="absent"), "INACCESSIBLE"),
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=None, def_status="absent"), "ABSENT"),       # job invisible au SP
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=True, def_status="absent"), "ABSENT"),
+    (dict(def_cov="SCRIPT", data_cov="NA", def_status="absent", iac=True), "AS_CODE"),           # recréé par l'IaC
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=True, def_status="new"), "NOUVEAU"),
+    # table : définition présente mais données en erreur → échec ; définition absente → absente
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", last_status="error", def_status="present"), "ECHEC"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", last_status="success", def_status="present"), "OK"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", last_status="success", def_status="absent"), "ABSENT"),
+    (dict(def_cov="SCRIPT", data_cov="SCRIPT", last_status="absent", def_status="present"), "ABSENT"),
+    # hors périmètre du script ou exclus : inchangé
+    (dict(def_cov="OTHER", data_cov="NA", def_status="absent"), "AUTRE"),                        # repos
+    (dict(def_cov="SCRIPT", data_cov="NA", excluded=True, def_status="absent"), "EXCLU"),
+    # fichier du backup non lu : comportement d'avant (droits seuls)
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=False, def_status=None), "INACCESSIBLE"),
+    (dict(def_cov="SCRIPT", data_cov="NA", accessible=True, def_status=None), "OK"),
+])
+def test_backup_content_overrides_rights_for_every_object(kwargs, expected):
+    assert R["verdict"](**kwargs) == expected

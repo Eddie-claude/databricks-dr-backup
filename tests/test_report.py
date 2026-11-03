@@ -74,3 +74,32 @@ def test_report_shows_discovered_saved_and_not_saved_tables():
 def test_report_without_clone_counts_still_renders():
     html = generate_report(diff=_DIFF, stats={"total_tables": 2}, steps=[])
     assert "Tables découvertes" in html
+
+
+def test_report_shows_reason_and_never_an_empty_cause():
+    # Cas client : table en erreur avec une cause vide dans le rapport
+    non_saved = [{"table": "c.s.droits", "status": "error", "reason": "droits insuffisants du compte de backup",
+                  "error": "[PERMISSION_DENIED] x"},
+                 {"table": "c.s.muette", "status": "error", "error": ""}]
+    html = generate_report(diff=_DIFF, stats={"total_tables": 2}, steps=[], non_saved=non_saved)
+    assert "droits insuffisants du compte de backup" in html and "[PERMISSION_DENIED] x" in html
+    assert "message d&#39;erreur vide" in html or "message d'erreur vide" in html
+
+
+from lib.report import top_copied
+
+
+def test_top_copied_ranks_by_copied_volume_with_share_of_table():
+    # Cas client : 240 GB copiés pour 184 tables : voir quelles tables sont recopiées en entier
+    manifest = [{"table": "c.s.rewritten", "status": "success", "size_gb": 40.0, "table_size_gb": 42.0},
+                {"table": "c.s.append", "status": "success", "size_gb": 2.0, "table_size_gb": 200.0},
+                {"table": "c.s.same", "status": "success", "size_gb": 0, "skipped_unchanged": True},
+                {"table": "c.s.err", "status": "error", "error": "x"},
+                {"table": "c.s.old", "status": "success", "size_gb": 5.0}]           # manifest antérieur à ce correctif
+    top = top_copied(manifest)
+    assert [t["table"] for t in top] == ["c.s.rewritten", "c.s.old", "c.s.append"]
+    assert top[0]["ratio_pct"] == 95 and top[2]["ratio_pct"] == 1
+    assert top[1]["table_gb"] is None and top[1]["ratio_pct"] is None
+    assert len(top_copied([{"table": f"t{i}", "status": "success", "size_gb": i + 1} for i in range(30)])) == 20
+    html = generate_report(diff=_DIFF, stats={"total_tables": 3}, steps=[], top=top)
+    assert "Plus gros volumes copiés" in html and "95 %" in html and "c.s.rewritten" in html
