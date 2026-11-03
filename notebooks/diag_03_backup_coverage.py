@@ -30,7 +30,7 @@ import concurrent.futures
 import html
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from pyspark.sql import SparkSession
@@ -425,7 +425,7 @@ if backup_root:
         last_status_by_table = {e["table"].lower(): e.get("status") for e in manifest}
         # Heure d'écriture du manifest : une table créée après est « nouvelle », pas « absente »
         try:
-            last_backup_at = datetime.utcfromtimestamp(dbutils.fs.ls(manifest_path)[0].modificationTime / 1000)
+            last_backup_at = datetime.fromtimestamp(dbutils.fs.ls(manifest_path)[0].modificationTime / 1000, timezone.utc).replace(tzinfo=None)
         except Exception:
             last_backup_at = datetime.fromisoformat(last_backup_date)
         print(f"[OK] Manifest du dernier backup : {len(last_status_by_table)} tables, écrit le {last_backup_at:%Y-%m-%d %H:%M} UTC")
@@ -509,11 +509,14 @@ volumes   = [r for r in _query("Volumes", f"SELECT * FROM {IS}.volumes WHERE vol
 functions = [r for r in _query("Fonctions", f"SELECT routine_catalog, routine_schema, routine_name, routine_owner, created, "
                                f"created_by FROM {IS}.routines WHERE routine_schema <> 'information_schema'")
              if _in_scope(r["routine_catalog"])]
+# Limitées au périmètre comme les autres objets : le catalog system porte lui-même des masques
+# (system.access.audit, system.query.history), comptés à tort dans le point d'attention
 protected_tables = {
     (r["table_catalog"].lower(), r["table_schema"].lower(), r["table_name"].lower())
     for view in ("row_filters", "column_masks")
     for r in _query(f"Tables protégées ({view})",
-                    f"SELECT DISTINCT table_catalog, table_schema, table_name FROM {IS}.{view}")}
+                    f"SELECT DISTINCT table_catalog, table_schema, table_name FROM {IS}.{view}")
+    if _in_scope(r["table_catalog"])}
 ext_locations = _query("External locations", f"SELECT * FROM {IS}.external_locations")
 credentials   = _query("Storage credentials", f"SELECT * FROM {IS}.storage_credentials")
 connections   = _query("Connexions", f"SELECT * FROM {IS}.connections")
@@ -720,7 +723,7 @@ def _present(kind: str, key):
     return None if found is None else str(key).lower() in found
 
 def _from_ms(ms):
-    return datetime.utcfromtimestamp(ms / 1000) if ms else None
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).replace(tzinfo=None) if ms else None
 
 for n, c in sorted(catalogs.items()):
     add("Metastore", "CATALOG", c["name"], sub=c.get("catalog_type", ""), catalog=c["name"],
